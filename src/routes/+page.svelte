@@ -83,21 +83,19 @@
 	}
 
 	function handleAnalyzeStart(event: CustomEvent<{ repo: string; focus: string }>) {
-		// Analysis is now handled in RepoAnalyzer with streaming
-		// This is called when analysis starts - we can add a user message
-		const { repo, focus } = event.detail;
+		// Analysis is handled in RepoAnalyzer with streaming - stay on analyze tab
 		isAnalyzing = true;
-		
-		messages.addMessage({
-			role: 'user',
-			content: `Analyze repository: ${repo}\nFocus: ${focus}`
-		});
 	}
 
 	function handleAnalyzeComplete(event: CustomEvent<{ analysis: string; toolCalls: any[]; iterations: number }>) {
 		const { analysis, toolCalls, iterations } = event.detail;
 		
-		// Add the analysis result to chat
+		// Add the analysis result to chat history
+		messages.addMessage({
+			role: 'user',
+			content: `Analyzed repository with focus on code quality`
+		});
+		
 		messages.addMessage({
 			role: 'assistant',
 			content: analysis,
@@ -108,7 +106,7 @@
 
 		isAnalyzing = false;
 		
-		// Switch to chat tab to show results
+		// Switch to chat tab to show full results
 		activeTab = 'chat';
 		
 		toast.success(`Analysis complete in ${iterations} iterations`);
