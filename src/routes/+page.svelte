@@ -201,72 +201,74 @@
 		</button>
 	</div>
 
-	<!-- Content Area -->
-	{#if activeTab === 'analyze'}
-		<!-- Analyze Tab -->
-		<div class="flex-1 overflow-y-auto p-6">
+	<!-- Content Area - Both tabs always mounted, CSS visibility toggle to preserve state -->
+	<div class="flex flex-1 flex-col overflow-hidden">
+		<!-- Analyze Tab (always mounted) -->
+		<div class="flex-1 overflow-y-auto p-6 {activeTab === 'analyze' ? '' : 'hidden'}">
 			<div class="mx-auto max-w-2xl">
 				<RepoAnalyzer on:analyze={handleAnalyzeStart} on:complete={handleAnalyzeComplete} />
 			</div>
 		</div>
-	{:else}
-		<!-- Chat Tab -->
-		<div bind:this={chatContainer} class="flex-1 overflow-y-auto">
-			{#if $messages.length === 0}
-				<!-- Empty State -->
-				<div class="flex h-full flex-col items-center justify-center p-8 text-center">
-					<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-secondary">
-						<Zap class="h-8 w-8 text-muted-foreground" />
-					</div>
-					<h2 class="mb-2 text-xl font-semibold">Marathon Agent</h2>
-					<p class="mb-6 max-w-md text-sm text-muted-foreground">
-						I'm an autonomous agent that can execute multi-step tasks. 
-						I can run code, do calculations, and work through complex problems step by step.
-					</p>
-					<div class="flex flex-wrap justify-center gap-2">
-						{#each [
-							'Calculate factorial of 10 and verify with code',
-							'What is the current time?',
-							'Write Python code to generate the first 20 Fibonacci numbers'
-						] as suggestion}
-							<button
-								on:click={() => handleSubmit(new CustomEvent('submit', { detail: suggestion }))}
-								class="rounded-full bg-secondary px-4 py-2 text-sm hover:bg-secondary/80"
-							>
-								{suggestion}
-							</button>
-						{/each}
-					</div>
-				</div>
-			{:else}
-				<!-- Messages -->
-				<div class="divide-y divide-border">
-					{#each $messages as message (message.id)}
-						<ChatMessage {message} />
-					{/each}
 
-					{#if $isLoading || isAnalyzing}
-						<div class="flex gap-4 p-4">
-							<div class="flex h-8 w-8 items-center justify-center rounded-full bg-accent">
-								<Bot class="h-4 w-4" />
-							</div>
-							<div class="flex flex-col gap-1">
-								<div class="flex items-center gap-2">
-									<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 0ms"></div>
-									<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 150ms"></div>
-									<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 300ms"></div>
-								</div>
-								{#if isAnalyzing}
-									<span class="text-xs text-muted-foreground">Analyzing repository... this may take 1-2 minutes</span>
-								{/if}
-							</div>
+		<!-- Chat Tab (always mounted) -->
+		<div class="flex flex-1 flex-col overflow-hidden {activeTab === 'chat' ? '' : 'hidden'}">
+			<div bind:this={chatContainer} class="flex-1 overflow-y-auto">
+				{#if $messages.length === 0}
+					<!-- Empty State -->
+					<div class="flex h-full flex-col items-center justify-center p-8 text-center">
+						<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-secondary">
+							<Zap class="h-8 w-8 text-muted-foreground" />
 						</div>
-					{/if}
-				</div>
-			{/if}
-		</div>
+						<h2 class="mb-2 text-xl font-semibold">Marathon Agent</h2>
+						<p class="mb-6 max-w-md text-sm text-muted-foreground">
+							I'm an autonomous agent that can execute multi-step tasks. 
+							I can run code, do calculations, and work through complex problems step by step.
+						</p>
+						<div class="flex flex-wrap justify-center gap-2">
+							{#each [
+								'Calculate factorial of 10 and verify with code',
+								'What is the current time?',
+								'Write Python code to generate the first 20 Fibonacci numbers'
+							] as suggestion}
+								<button
+									on:click={() => handleSubmit(new CustomEvent('submit', { detail: suggestion }))}
+									class="rounded-full bg-secondary px-4 py-2 text-sm hover:bg-secondary/80"
+								>
+									{suggestion}
+								</button>
+							{/each}
+						</div>
+					</div>
+				{:else}
+					<!-- Messages -->
+					<div class="divide-y divide-border">
+						{#each $messages as message (message.id)}
+							<ChatMessage {message} />
+						{/each}
 
-		<!-- Input -->
-		<ChatInput on:submit={handleSubmit} loading={$isLoading || isAnalyzing} disabled={connectionStatus !== 'connected'} />
-	{/if}
+						{#if $isLoading || isAnalyzing}
+							<div class="flex gap-4 p-4">
+								<div class="flex h-8 w-8 items-center justify-center rounded-full bg-accent">
+									<Bot class="h-4 w-4" />
+								</div>
+								<div class="flex flex-col gap-1">
+									<div class="flex items-center gap-2">
+										<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 0ms"></div>
+										<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 150ms"></div>
+										<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 300ms"></div>
+									</div>
+									{#if isAnalyzing}
+										<span class="text-xs text-muted-foreground">Analyzing repository... this may take 1-2 minutes</span>
+									{/if}
+								</div>
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Input -->
+			<ChatInput on:submit={handleSubmit} loading={$isLoading || isAnalyzing} disabled={connectionStatus !== 'connected'} />
+		</div>
+	</div>
 </div>
