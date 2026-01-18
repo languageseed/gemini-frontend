@@ -144,12 +144,17 @@
 				? `${baseUrl}/v4/analyze/verified/stream`
 				: `${baseUrl}/v3/analyze/stream`;
 
+			// Build headers - only include API key if present
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json',
+			};
+			if (apiKey) {
+				headers['X-API-Key'] = apiKey;
+			}
+
 			const response = await fetch(endpoint, {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'X-API-Key': apiKey,
-				},
+				headers,
 				body: JSON.stringify({
 					repo_url: repoUrl.trim(),
 					focus,

@@ -56,21 +56,66 @@ interface SSEEvent {
 // ============================================================
 
 const API_KEY_STORAGE_KEY = 'gemini_api_key';
+const STORAGE_TYPE_KEY = 'gemini_api_key_storage_type';
+
+type StorageType = 'session' | 'local' | 'memory';
 
 class ApiClient {
 	private apiKey: string | null = null;
+	private storageType: StorageType = 'session'; // Default to session for security
 
 	constructor() {
-		// Load API key from localStorage on initialization
 		if (typeof window !== 'undefined') {
-			this.apiKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+			// Check preferred storage type
+			const storedType = localStorage.getItem(STORAGE_TYPE_KEY) as StorageType | null;
+			this.storageType = storedType || 'session';
+			
+			// Load API key from appropriate storage
+			if (this.storageType === 'local') {
+				this.apiKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+			} else if (this.storageType === 'session') {
+				this.apiKey = sessionStorage.getItem(API_KEY_STORAGE_KEY);
+			}
+			// 'memory' mode = don't persist, just keep in memory
 		}
+	}
+
+	/**
+	 * Set storage type for API key
+	 * - 'session': Cleared when browser tab closes (more secure)
+	 * - 'local': Persists across sessions (convenient but less secure)
+	 * - 'memory': Never persisted (most secure, but lost on refresh)
+	 */
+	setStorageType(type: StorageType) {
+		this.storageType = type;
+		if (typeof window !== 'undefined') {
+			localStorage.setItem(STORAGE_TYPE_KEY, type);
+			
+			// Migrate existing key if needed
+			if (this.apiKey) {
+				this.setApiKey(this.apiKey);
+			}
+		}
+	}
+
+	getStorageType(): StorageType {
+		return this.storageType;
 	}
 
 	setApiKey(key: string) {
 		this.apiKey = key;
 		if (typeof window !== 'undefined') {
-			localStorage.setItem(API_KEY_STORAGE_KEY, key);
+			// Clear from both storages first
+			localStorage.removeItem(API_KEY_STORAGE_KEY);
+			sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+			
+			// Store in appropriate location
+			if (this.storageType === 'local') {
+				localStorage.setItem(API_KEY_STORAGE_KEY, key);
+			} else if (this.storageType === 'session') {
+				sessionStorage.setItem(API_KEY_STORAGE_KEY, key);
+			}
+			// 'memory' mode = don't store anywhere
 		}
 	}
 
@@ -78,6 +123,7 @@ class ApiClient {
 		this.apiKey = null;
 		if (typeof window !== 'undefined') {
 			localStorage.removeItem(API_KEY_STORAGE_KEY);
+			sessionStorage.removeItem(API_KEY_STORAGE_KEY);
 		}
 	}
 
@@ -85,10 +131,15 @@ class ApiClient {
 		return this.apiKey;
 	}
 
+	hasApiKey(): boolean {
+		return !!this.apiKey;
+	}
+
 	getHeaders(): HeadersInit {
 		const headers: HeadersInit = {
 			'Content-Type': 'application/json'
 		};
+		// Only add API key header if we have one
 		if (this.apiKey) {
 			headers['X-API-Key'] = this.apiKey;
 		}

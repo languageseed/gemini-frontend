@@ -22,7 +22,7 @@
 		// New fix fields
 		fix_code?: string;
 		fix_description?: string;
-		fix_verified?: boolean;
+		fix_status?: 'none' | 'proposed' | 'verified' | 'failed';
 	};
 
 	let expanded = false;
@@ -180,8 +180,10 @@
 					<div class="flex items-center justify-between mb-2">
 						<div class="text-sm font-medium text-green-400 flex items-center gap-2">
 							✨ AI-Generated Fix
-							{#if issue.fix_verified}
+							{#if issue.fix_status === 'verified'}
 								<span class="text-xs bg-green-500/20 px-2 py-0.5 rounded">Verified</span>
+							{:else if issue.fix_status === 'proposed'}
+								<span class="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">Proposed</span>
 							{/if}
 						</div>
 						<button
