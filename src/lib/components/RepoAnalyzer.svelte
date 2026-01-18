@@ -3,9 +3,10 @@
 	import { 
 		Github, Search, Loader2, AlertCircle, CheckCircle, Code, Zap, 
 		Shield, Bug, Layout, Clock, Activity, Brain, Wrench, 
-		ChevronDown, ChevronUp, BarChart3, Cpu, Timer
+		ChevronDown, ChevronUp, BarChart3, Timer, Beaker
 	} from 'lucide-svelte';
 	import { api } from '$lib/utils/api';
+	import AnalysisResults from './AnalysisResults.svelte';
 
 	const dispatch = createEventDispatcher<{ 
 		analyze: { repo: string; focus: string };
@@ -14,8 +15,12 @@
 
 	let repoUrl = '';
 	let focus = 'all';
+	let verifyFindings = true;  // NEW: Toggle for verified analysis
 	let isAnalyzing = false;
 	let error: string | null = null;
+	
+	// Results state
+	let analysisResult: any = null;
 	
 	// Observability state
 	let startTime: Date | null = null;
@@ -25,21 +30,12 @@
 	// Progress tracking
 	let currentPhase = '';
 	let currentStep = '';
-	let iteration = 0;
-	let maxIterations = 20;
-	
-	// Metrics
-	let tokensEstimated = 0;
-	let toolCallsCount = 0;
-	let filesAnalyzed = 0;
+	let issuesFound: any[] = [];
+	let verifiedCount = 0;
 	
 	// Event log
 	let events: ProgressEvent[] = [];
 	let showFullLog = false;
-	
-	// Tool calls tracking
-	let activeTools: Map<string, { startTime: Date; status: 'running' | 'done' | 'error' }> = new Map();
-	let completedTools: ToolExecution[] = [];
 
 	interface ProgressEvent {
 		type: string;
@@ -49,28 +45,21 @@
 		phase?: string;
 	}
 
-	interface ToolExecution {
-		name: string;
-		args: any;
-		duration: number;
-		output: string;
-		success: boolean;
-	}
-
 	const focusOptions = [
-		{ value: 'all', label: 'Full Analysis', description: 'Bugs, security, performance, architecture', icon: Zap },
-		{ value: 'bugs', label: 'Bug Detection', description: 'Logic errors, edge cases, error handling', icon: Bug },
-		{ value: 'security', label: 'Security Audit', description: 'Vulnerabilities, injection risks, auth issues', icon: Shield },
-		{ value: 'performance', label: 'Performance', description: 'Bottlenecks, inefficient algorithms', icon: Zap },
-		{ value: 'architecture', label: 'Architecture', description: 'Patterns, modularity, maintainability', icon: Layout },
+		{ value: 'all', label: 'Full Analysis', icon: Zap },
+		{ value: 'bugs', label: 'Bug Detection', icon: Bug },
+		{ value: 'security', label: 'Security Audit', icon: Shield },
+		{ value: 'performance', label: 'Performance', icon: Zap },
+		{ value: 'architecture', label: 'Architecture', icon: Layout },
 	];
 
 	const phases = [
-		{ id: 'init', label: 'Initializing', icon: Zap },
-		{ id: 'clone', label: 'Cloning Repo', icon: Github },
-		{ id: 'analyze', label: 'Analyzing', icon: Brain },
-		{ id: 'report', label: 'Generating Report', icon: Code },
-		{ id: 'done', label: 'Complete', icon: CheckCircle },
+		{ id: 'init', label: 'Init', icon: Zap },
+		{ id: 'clone', label: 'Clone', icon: Github },
+		{ id: 'analysis', label: 'Analyze', icon: Brain },
+		{ id: 'extraction', label: 'Extract', icon: Code },
+		{ id: 'verification', label: 'Verify', icon: Beaker },
+		{ id: 'done', label: 'Done', icon: CheckCircle },
 	];
 
 	function addEvent(type: string, message: string, phase?: string, data?: any) {
@@ -103,15 +92,12 @@
 
 	function resetState() {
 		events = [];
-		activeTools = new Map();
-		completedTools = [];
-		iteration = 0;
-		tokensEstimated = 0;
-		toolCallsCount = 0;
-		filesAnalyzed = 0;
+		issuesFound = [];
+		verifiedCount = 0;
 		currentPhase = 'init';
 		currentStep = '';
 		error = null;
+		analysisResult = null;
 	}
 
 	async function handleSubmit() {
@@ -127,14 +113,19 @@
 		
 		dispatch('analyze', { repo: repoUrl.trim(), focus });
 		
-		addEvent('start', `Starting analysis of ${repoUrl}`, 'init');
+		addEvent('start', `Starting ${verifyFindings ? 'verified ' : ''}analysis of ${repoUrl}`, 'init');
 		currentStep = 'Connecting to server...';
 
 		try {
 			const apiKey = api.getApiKey() || '';
 			const baseUrl = import.meta.env.VITE_API_URL || 'https://gemini-agent-hackathon-production.up.railway.app';
 
-			const response = await fetch(`${baseUrl}/v3/analyze/stream`, {
+			// Use V4 verified endpoint if enabled, otherwise V3
+			const endpoint = verifyFindings 
+				? `${baseUrl}/v4/analyze/verified/stream`
+				: `${baseUrl}/v3/analyze/stream`;
+
+			const response = await fetch(endpoint, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -143,6 +134,7 @@
 				body: JSON.stringify({
 					repo_url: repoUrl.trim(),
 					focus,
+					max_issues_to_verify: 10,
 				}),
 			});
 
@@ -182,13 +174,22 @@
 						if (event.type === 'done') {
 							stopTimer();
 							currentPhase = 'done';
-							addEvent('done', `Analysis complete in ${event.iterations} iterations`, 'done');
 							
-							dispatch('complete', {
-								analysis: event.analysis || '',
-								toolCalls: event.tool_calls || [],
-								iterations: event.iterations || 0,
-							});
+							// Handle V4 verified results vs V3 simple results
+							if (event.issues) {
+								// V4 verified result
+								analysisResult = event;
+								addEvent('done', `Analysis complete: ${event.total_issues} issues, ${event.verified_count} verified`, 'done');
+							} else {
+								// V3 simple result
+								addEvent('done', `Analysis complete`, 'done');
+								dispatch('complete', {
+									analysis: event.analysis || '',
+									toolCalls: event.tool_calls || [],
+									iterations: event.iterations || 0,
+								});
+							}
+							
 							isAnalyzing = false;
 							return;
 						}
@@ -214,100 +215,43 @@
 
 	function handleStreamEvent(event: any) {
 		switch (event.type) {
-			case 'start':
-				currentStep = 'Agent initialized';
-				addEvent('start', 'Agent started processing task', 'init');
-				// Estimate tokens from task length
-				tokensEstimated += (event.task?.length || 0) / 4;
-				break;
-				
 			case 'thinking':
-				iteration = event.iteration || iteration;
-				const thinkingLevel = event.level || 'standard';
-				currentStep = `Reasoning (${thinkingLevel} thinking)`;
-				currentPhase = 'analyze';
-				addEvent('thinking', `Iteration ${event.iteration}: ${thinkingLevel} thinking mode`, 'analyze', {
-					iteration: event.iteration,
-					level: thinkingLevel
-				});
-				// Estimate tokens for thinking
-				tokensEstimated += thinkingLevel === 'high' ? 500 : thinkingLevel === 'medium' ? 300 : 100;
+				currentPhase = event.phase || currentPhase;
+				currentStep = event.message || `Phase: ${event.phase}`;
+				addEvent('thinking', event.message || event.phase, event.phase);
 				break;
 				
 			case 'tool_start':
-				const toolName = event.name || 'Unknown tool';
-				toolCallsCount++;
-				activeTools.set(toolName, { startTime: new Date(), status: 'running' });
-				activeTools = activeTools; // Trigger reactivity
-				
-				const toolMessage = getToolMessage(toolName, event.arguments);
-				currentStep = toolMessage;
-				
-				if (toolName === 'clone_repo') {
+				currentStep = `Running: ${event.name}`;
+				if (event.name === 'clone_repo') {
 					currentPhase = 'clone';
-					addEvent('tool', toolMessage, 'clone', event);
-				} else {
-					addEvent('tool', toolMessage, 'analyze', event);
 				}
+				addEvent('tool', `Started: ${event.name}`, undefined, event);
 				break;
 				
 			case 'tool_result':
-				const resultToolName = event.name || 'Unknown';
-				const toolInfo = activeTools.get(resultToolName);
-				const duration = toolInfo ? (Date.now() - toolInfo.startTime.getTime()) : 0;
-				
-				activeTools.delete(resultToolName);
-				activeTools = activeTools;
-				
-				completedTools = [...completedTools, {
-					name: resultToolName,
-					args: event.arguments || {},
-					duration,
-					output: event.output?.substring(0, 200) || '',
-					success: !event.output?.startsWith('Error')
-				}];
-				
-				// Estimate files from clone_repo output
-				if (resultToolName === 'clone_repo' && event.output) {
-					const match = event.output.match(/Total files: (\d+)/);
-					if (match) filesAnalyzed = parseInt(match[1]);
+				if (event.name === 'issue_found' && event.issue) {
+					issuesFound = [...issuesFound, event.issue];
+					addEvent('issue', `Found: ${event.issue.title}`, undefined, event.issue);
+				} else if (event.name === 'verify_issue') {
+					if (event.status === 'verified') {
+						verifiedCount++;
+						addEvent('verified', `✓ Verified: ${event.issue_id}`, 'verification');
+					} else {
+						addEvent('unverified', `? Unverified: ${event.issue_id}`, 'verification');
+					}
+				} else {
+					addEvent('result', `Completed: ${event.name}`, undefined, event);
 				}
-				
-				// Estimate tokens from output
-				tokensEstimated += (event.output?.length || 0) / 4;
-				
-				addEvent('result', `${resultToolName} completed (${duration}ms)`, undefined, { 
-					duration, 
-					preview: event.output?.substring(0, 100) 
-				});
 				break;
 				
 			case 'token':
 				currentStep = 'Generating analysis...';
-				currentPhase = 'report';
-				// Estimate tokens from generated text
-				tokensEstimated += (event.content?.length || 0) / 4;
+				currentPhase = 'analysis';
 				break;
 				
 			case 'heartbeat':
 				break;
-		}
-	}
-
-	function getToolMessage(toolName: string, args?: any): string {
-		switch (toolName) {
-			case 'clone_repo':
-				return `Cloning: ${args?.repo_url || repoUrl}`;
-			case 'analyze_code':
-				return `Analyzing: ${args?.path || 'code files'}`;
-			case 'execute_code':
-				return 'Running verification code...';
-			case 'search_code':
-				return `Searching: ${args?.query || 'patterns'}`;
-			case 'read_file':
-				return `Reading: ${args?.path || 'file'}`;
-			default:
-				return `Running: ${toolName}`;
 		}
 	}
 
@@ -318,226 +262,221 @@
 	function getPhaseIndex(phase: string): number {
 		return phases.findIndex(p => p.id === phase);
 	}
+
+	function startNewAnalysis() {
+		analysisResult = null;
+		resetState();
+	}
 </script>
 
 <div class="space-y-4">
-	<!-- Input Card -->
-	<div class="rounded-lg border border-border bg-secondary/30 p-6">
-		<div class="mb-4 flex items-center gap-2">
-			<Github class="h-5 w-5" />
-			<h3 class="text-lg font-semibold">Codebase Analyst</h3>
-			<span class="rounded bg-primary/20 px-2 py-0.5 text-xs text-primary">Beta</span>
-		</div>
-
-		<form on:submit|preventDefault={handleSubmit} class="space-y-4">
-			<!-- Repository URL -->
-			<div>
-				<label for="repo-url" class="mb-1 block text-sm font-medium">Repository URL</label>
-				<input
-					id="repo-url"
-					type="text"
-					bind:value={repoUrl}
-					placeholder="https://github.com/owner/repo or owner/repo"
-					class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-					disabled={isAnalyzing}
-				/>
-				<div class="mt-1 flex gap-2 text-xs text-muted-foreground">
-					<span>Try:</span>
-					{#each ['facebook/react', 'sveltejs/svelte', 'fastapi/fastapi'] as example}
-						<button type="button" on:click={() => setExample(example)} class="text-primary hover:underline">
-							{example}
-						</button>
-					{/each}
-				</div>
-			</div>
-
-			<!-- Focus Area -->
-			<div>
-				<span class="mb-2 block text-sm font-medium">Analysis Focus</span>
-				<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-					{#each focusOptions as option}
-						<label
-							class="flex cursor-pointer items-center gap-2 rounded-lg border border-input p-2 text-xs transition-colors hover:bg-secondary/50 {focus === option.value ? 'border-primary bg-primary/10' : ''}"
-						>
-							<input type="radio" name="focus" value={option.value} bind:group={focus} class="sr-only" disabled={isAnalyzing} />
-							<svelte:component this={option.icon} class="h-3 w-3" />
-							<span>{option.label}</span>
-						</label>
-					{/each}
-				</div>
-			</div>
-
-			<!-- Error -->
-			{#if error}
-				<div class="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-					<AlertCircle class="h-4 w-4" />
-					{error}
-				</div>
-			{/if}
-
-			<!-- Submit -->
+	<!-- Show Results if available -->
+	{#if analysisResult}
+		<div class="mb-4">
 			<button
-				type="submit"
-				disabled={isAnalyzing || !repoUrl.trim()}
-				class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+				type="button"
+				on:click={startNewAnalysis}
+				class="text-sm text-primary hover:underline flex items-center gap-1"
 			>
-				{#if isAnalyzing}
-					<Loader2 class="h-4 w-4 animate-spin" />
-					Analyzing...
-				{:else}
-					<Search class="h-4 w-4" />
-					Analyze Repository
-				{/if}
+				← Analyze another repository
 			</button>
-		</form>
-	</div>
-
-	<!-- Observability Panel (shown during/after analysis) -->
-	{#if isAnalyzing || events.length > 0}
-		<div class="rounded-lg border border-border bg-background p-4 space-y-4">
-			<!-- Header with Timer -->
-			<div class="flex items-center justify-between">
-				<div class="flex items-center gap-2">
-					<Activity class="h-5 w-5 text-primary" />
-					<h4 class="font-semibold">Agent Activity</h4>
-				</div>
-				<div class="flex items-center gap-4 text-sm">
-					<div class="flex items-center gap-1.5 text-muted-foreground">
-						<Timer class="h-4 w-4" />
-						<span class="font-mono">{formatTime(elapsedSeconds)}</span>
-					</div>
-					{#if isAnalyzing}
-						<span class="flex items-center gap-1 text-green-500">
-							<span class="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-							Live
-						</span>
-					{:else}
-						<span class="text-muted-foreground">Completed</span>
-					{/if}
-				</div>
+		</div>
+		<AnalysisResults result={analysisResult} />
+	{:else}
+		<!-- Input Card -->
+		<div class="rounded-lg border border-border bg-secondary/30 p-6">
+			<div class="mb-4 flex items-center gap-2">
+				<Github class="h-5 w-5" />
+				<h3 class="text-lg font-semibold">Codebase Analyst</h3>
+				<span class="rounded bg-primary/20 px-2 py-0.5 text-xs text-primary">V2</span>
 			</div>
 
-			<!-- Phase Progress Bar -->
-			<div class="space-y-2">
-				<div class="flex justify-between text-xs text-muted-foreground">
-					{#each phases as phase, i}
-						{@const isActive = phase.id === currentPhase}
-						{@const isComplete = getPhaseIndex(currentPhase) > i}
-						<div class="flex flex-col items-center gap-1 {isActive ? 'text-primary' : isComplete ? 'text-green-500' : ''}">
-							<svelte:component this={phase.icon} class="h-4 w-4" />
-							<span class="text-[10px]">{phase.label}</span>
-						</div>
-					{/each}
-				</div>
-				<div class="h-1.5 rounded-full bg-secondary overflow-hidden">
-					<div 
-						class="h-full bg-primary transition-all duration-500"
-						style="width: {((getPhaseIndex(currentPhase) + 1) / phases.length) * 100}%"
-					></div>
-				</div>
-			</div>
-
-			<!-- Metrics Grid -->
-			<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-				<div class="rounded-lg bg-secondary/50 p-3">
-					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-						<Brain class="h-3 w-3" />
-						Iteration
-					</div>
-					<div class="text-lg font-semibold">{iteration}<span class="text-sm text-muted-foreground">/{maxIterations}</span></div>
-				</div>
-				<div class="rounded-lg bg-secondary/50 p-3">
-					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-						<Wrench class="h-3 w-3" />
-						Tool Calls
-					</div>
-					<div class="text-lg font-semibold">{toolCallsCount}</div>
-				</div>
-				<div class="rounded-lg bg-secondary/50 p-3">
-					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-						<Code class="h-3 w-3" />
-						Files
-					</div>
-					<div class="text-lg font-semibold">{filesAnalyzed || '—'}</div>
-				</div>
-				<div class="rounded-lg bg-secondary/50 p-3">
-					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-						<BarChart3 class="h-3 w-3" />
-						Est. Tokens
-					</div>
-					<div class="text-lg font-semibold">{Math.round(tokensEstimated).toLocaleString()}</div>
-				</div>
-			</div>
-
-			<!-- Current Step -->
-			{#if isAnalyzing && currentStep}
-				<div class="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 p-3">
-					<Loader2 class="h-4 w-4 animate-spin text-primary" />
-					<span class="text-sm font-medium">{currentStep}</span>
-				</div>
-			{/if}
-
-			<!-- Active Tools -->
-			{#if activeTools.size > 0}
-				<div class="space-y-2">
-					<div class="text-xs font-medium text-muted-foreground">Active Tools</div>
-					{#each [...activeTools.entries()] as [name, info]}
-						<div class="flex items-center gap-2 rounded bg-yellow-500/10 border border-yellow-500/20 p-2 text-sm">
-							<Loader2 class="h-3 w-3 animate-spin text-yellow-500" />
-							<span class="font-mono text-xs">{name}</span>
-							<span class="text-xs text-muted-foreground ml-auto">
-								{Math.floor((Date.now() - info.startTime.getTime()) / 1000)}s
-							</span>
-						</div>
-					{/each}
-				</div>
-			{/if}
-
-			<!-- Completed Tools -->
-			{#if completedTools.length > 0}
-				<div class="space-y-2">
-					<div class="text-xs font-medium text-muted-foreground">Completed Tools ({completedTools.length})</div>
-					<div class="max-h-32 overflow-y-auto space-y-1">
-						{#each completedTools.slice(-5).reverse() as tool}
-							<div class="flex items-center gap-2 rounded bg-secondary/50 p-2 text-xs">
-								<CheckCircle class="h-3 w-3 text-green-500 flex-shrink-0" />
-								<span class="font-mono">{tool.name}</span>
-								<span class="text-muted-foreground ml-auto">{tool.duration}ms</span>
-							</div>
+			<form on:submit|preventDefault={handleSubmit} class="space-y-4">
+				<!-- Repository URL -->
+				<div>
+					<label for="repo-url" class="mb-1 block text-sm font-medium">Repository URL</label>
+					<input
+						id="repo-url"
+						type="text"
+						bind:value={repoUrl}
+						placeholder="https://github.com/owner/repo or owner/repo"
+						class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+						disabled={isAnalyzing}
+					/>
+					<div class="mt-1 flex gap-2 text-xs text-muted-foreground">
+						<span>Try:</span>
+						{#each ['facebook/react', 'sveltejs/svelte', 'fastapi/fastapi'] as example}
+							<button type="button" on:click={() => setExample(example)} class="text-primary hover:underline">
+								{example}
+							</button>
 						{/each}
 					</div>
 				</div>
-			{/if}
 
-			<!-- Event Log Toggle -->
-			<button
-				type="button"
-				on:click={() => showFullLog = !showFullLog}
-				class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-			>
-				{#if showFullLog}
-					<ChevronUp class="h-3 w-3" />
-					Hide event log
-				{:else}
-					<ChevronDown class="h-3 w-3" />
-					Show event log ({events.length} events)
-				{/if}
-			</button>
-
-			<!-- Full Event Log -->
-			{#if showFullLog}
-				<div class="max-h-48 overflow-y-auto rounded bg-secondary/30 p-2 text-xs font-mono space-y-1">
-					{#each events as event}
-						<div class="flex gap-2 py-0.5 {event.type === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
-							<span class="text-[10px] opacity-50 w-16 flex-shrink-0">
-								{event.timestamp.toLocaleTimeString()}
-							</span>
-							<span class="text-primary/70">[{event.type}]</span>
-							<span class="flex-1">{event.message}</span>
-						</div>
-					{/each}
+				<!-- Focus Area -->
+				<div>
+					<span class="mb-2 block text-sm font-medium">Analysis Focus</span>
+					<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+						{#each focusOptions as option}
+							<label
+								class="flex cursor-pointer items-center gap-2 rounded-lg border border-input p-2 text-xs transition-colors hover:bg-secondary/50 {focus === option.value ? 'border-primary bg-primary/10' : ''}"
+							>
+								<input type="radio" name="focus" value={option.value} bind:group={focus} class="sr-only" disabled={isAnalyzing} />
+								<svelte:component this={option.icon} class="h-3 w-3" />
+								<span>{option.label}</span>
+							</label>
+						{/each}
+					</div>
 				</div>
-			{/if}
+
+				<!-- Verify Toggle -->
+				<div class="flex items-center justify-between rounded-lg border border-border bg-background p-3">
+					<div class="flex items-center gap-2">
+						<Beaker class="h-4 w-4 text-green-400" />
+						<div>
+							<div class="text-sm font-medium">Verify Findings</div>
+							<div class="text-xs text-muted-foreground">Generate and run tests to confirm bugs</div>
+						</div>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer">
+						<input type="checkbox" bind:checked={verifyFindings} class="sr-only peer" disabled={isAnalyzing} />
+						<div class="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-green-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+					</label>
+				</div>
+
+				<!-- Error -->
+				{#if error}
+					<div class="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+						<AlertCircle class="h-4 w-4" />
+						{error}
+					</div>
+				{/if}
+
+				<!-- Submit -->
+				<button
+					type="submit"
+					disabled={isAnalyzing || !repoUrl.trim()}
+					class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					{#if isAnalyzing}
+						<Loader2 class="h-4 w-4 animate-spin" />
+						Analyzing...
+					{:else}
+						<Search class="h-4 w-4" />
+						{verifyFindings ? 'Analyze & Verify' : 'Analyze Repository'}
+					{/if}
+				</button>
+			</form>
 		</div>
+
+		<!-- Observability Panel (shown during analysis) -->
+		{#if isAnalyzing || events.length > 0}
+			<div class="rounded-lg border border-border bg-background p-4 space-y-4">
+				<!-- Header with Timer -->
+				<div class="flex items-center justify-between">
+					<div class="flex items-center gap-2">
+						<Activity class="h-5 w-5 text-primary" />
+						<h4 class="font-semibold">Agent Activity</h4>
+					</div>
+					<div class="flex items-center gap-4 text-sm">
+						<div class="flex items-center gap-1.5 text-muted-foreground">
+							<Timer class="h-4 w-4" />
+							<span class="font-mono">{formatTime(elapsedSeconds)}</span>
+						</div>
+						{#if isAnalyzing}
+							<span class="flex items-center gap-1 text-green-500">
+								<span class="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+								Live
+							</span>
+						{:else}
+							<span class="text-muted-foreground">Completed</span>
+						{/if}
+					</div>
+				</div>
+
+				<!-- Phase Progress Bar -->
+				<div class="space-y-2">
+					<div class="flex justify-between text-xs text-muted-foreground">
+						{#each phases as phase, i}
+							{@const isActive = phase.id === currentPhase}
+							{@const isComplete = getPhaseIndex(currentPhase) > i}
+							<div class="flex flex-col items-center gap-1 {isActive ? 'text-primary' : isComplete ? 'text-green-500' : ''}">
+								<svelte:component this={phase.icon} class="h-4 w-4" />
+								<span class="text-[10px]">{phase.label}</span>
+							</div>
+						{/each}
+					</div>
+					<div class="h-1.5 rounded-full bg-secondary overflow-hidden">
+						<div 
+							class="h-full bg-primary transition-all duration-500"
+							style="width: {((getPhaseIndex(currentPhase) + 1) / phases.length) * 100}%"
+						></div>
+					</div>
+				</div>
+
+				<!-- Metrics Grid -->
+				<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+					<div class="rounded-lg bg-secondary/50 p-3">
+						<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+							<Bug class="h-3 w-3" />
+							Issues Found
+						</div>
+						<div class="text-lg font-semibold">{issuesFound.length}</div>
+					</div>
+					<div class="rounded-lg bg-green-500/10 border border-green-500/20 p-3">
+						<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+							<CheckCircle class="h-3 w-3 text-green-400" />
+							Verified
+						</div>
+						<div class="text-lg font-semibold text-green-400">{verifiedCount}</div>
+					</div>
+					<div class="rounded-lg bg-secondary/50 p-3">
+						<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+							<Clock class="h-3 w-3" />
+							Elapsed
+						</div>
+						<div class="text-lg font-semibold">{formatTime(elapsedSeconds)}</div>
+					</div>
+				</div>
+
+				<!-- Current Step -->
+				{#if isAnalyzing && currentStep}
+					<div class="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 p-3">
+						<Loader2 class="h-4 w-4 animate-spin text-primary" />
+						<span class="text-sm font-medium">{currentStep}</span>
+					</div>
+				{/if}
+
+				<!-- Event Log Toggle -->
+				<button
+					type="button"
+					on:click={() => showFullLog = !showFullLog}
+					class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+				>
+					{#if showFullLog}
+						<ChevronUp class="h-3 w-3" />
+						Hide event log
+					{:else}
+						<ChevronDown class="h-3 w-3" />
+						Show event log ({events.length} events)
+					{/if}
+				</button>
+
+				<!-- Full Event Log -->
+				{#if showFullLog}
+					<div class="max-h-48 overflow-y-auto rounded bg-secondary/30 p-2 text-xs font-mono space-y-1">
+						{#each events as event}
+							<div class="flex gap-2 py-0.5 {event.type === 'error' ? 'text-destructive' : event.type === 'verified' ? 'text-green-400' : event.type === 'issue' ? 'text-yellow-400' : 'text-muted-foreground'}">
+								<span class="text-[10px] opacity-50 w-16 flex-shrink-0">
+									{event.timestamp.toLocaleTimeString()}
+								</span>
+								<span class="text-primary/70">[{event.type}]</span>
+								<span class="flex-1">{event.message}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </div>
