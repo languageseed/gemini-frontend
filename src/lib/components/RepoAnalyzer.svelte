@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, onMount } from 'svelte';
 	import { 
 		Github, Search, Loader2, AlertCircle, CheckCircle, Code, Zap, 
 		Shield, Bug, Layout, Clock, Activity, Brain, Wrench, 
@@ -19,6 +19,10 @@
 	let verifyFindings = true;
 	let isAnalyzing = false;
 	let error: string | null = null;
+	
+	// Pre-flight check state
+	let backendConfig: { e2b_configured?: boolean; gemini_configured?: boolean } | null = null;
+	let configWarning: string | null = null;
 	
 	// Results state
 	let analysisResult: any = null;
@@ -356,6 +360,21 @@
 		analysisResult = null;
 		resetState();
 	}
+
+	// Pre-flight check on mount
+	onMount(async () => {
+		try {
+			const health = await api.health();
+			backendConfig = health.config || null;
+			
+			// Warn if E2B not configured and verify is enabled
+			if (backendConfig && !backendConfig.e2b_configured) {
+				configWarning = "E2B sandbox not configured - verification will use limited fallback mode";
+			}
+		} catch (e) {
+			// Health check failed - will show as disconnected in main UI
+		}
+	});
 </script>
 
 <div class="space-y-4">
@@ -432,6 +451,14 @@
 						<div class="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-green-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
 					</label>
 				</div>
+
+				<!-- Config Warning -->
+				{#if configWarning && verifyFindings}
+					<div class="flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-3 text-sm text-yellow-400">
+						<AlertCircle class="h-4 w-4" />
+						{configWarning}
+					</div>
+				{/if}
 
 				<!-- Error -->
 				{#if error}

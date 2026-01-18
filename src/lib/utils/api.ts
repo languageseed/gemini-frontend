@@ -35,6 +35,10 @@ interface HealthResponse {
 	secured: boolean;
 	version?: string;
 	capabilities?: string[];
+	config?: {
+		e2b_configured?: boolean;
+		gemini_configured?: boolean;
+	};
 }
 
 interface ToolDefinition {
