@@ -1,17 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { Bot, Sparkles, Github, FileText, Zap } from 'lucide-svelte';
+	import { Bot, Sparkles, Github, FileText, Zap, Code, MessageSquare } from 'lucide-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import ChatInput from '$lib/components/ChatInput.svelte';
 	import StatusIndicator from '$lib/components/StatusIndicator.svelte';
 	import ApiKeyInput from '$lib/components/ApiKeyInput.svelte';
+	import RepoAnalyzer from '$lib/components/RepoAnalyzer.svelte';
 	import { messages, isLoading, error, currentSessionId } from '$lib/stores/chat';
 	import { api, type HealthResponse } from '$lib/utils/api';
 
 	let health: HealthResponse | null = null;
 	let connectionStatus: 'connected' | 'disconnected' | 'loading' = 'loading';
 	let chatContainer: HTMLDivElement;
+	let activeTab: 'chat' | 'analyze' = 'chat';
+	let isAnalyzing = false;
 
 	onMount(async () => {
 		try {
@@ -71,6 +74,55 @@
 			toast.error(errorMessage);
 		} finally {
 			$isLoading = false;
+		}
+
+		// Scroll to bottom
+		setTimeout(() => {
+			chatContainer?.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+		}, 100);
+	}
+
+	async function handleAnalyze(event: CustomEvent<{ repo: string; focus: string }>) {
+		const { repo, focus } = event.detail;
+		
+		isAnalyzing = true;
+		
+		// Switch to chat tab to show results
+		activeTab = 'chat';
+		
+		// Add user message
+		messages.addMessage({
+			role: 'user',
+			content: `Analyze repository: ${repo}\nFocus: ${focus}`
+		});
+
+		try {
+			const response = await api.analyzeRepo({
+				repo_url: repo,
+				focus: focus as 'bugs' | 'security' | 'performance' | 'architecture' | 'all'
+			});
+
+			messages.addMessage({
+				role: 'assistant',
+				content: response.analysis,
+				toolCalls: response.tool_calls,
+				iterations: response.iterations,
+				sessionId: response.session_id,
+				completed: response.completed
+			});
+
+			toast.success(`Analyzed ${response.files_analyzed} files, found ${response.issues_found} issues`);
+		} catch (e) {
+			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			toast.error(errorMessage);
+			
+			messages.addMessage({
+				role: 'assistant',
+				content: `Analysis failed: ${errorMessage}`,
+				completed: false
+			});
+		} finally {
+			isAnalyzing = false;
 		}
 
 		// Scroll to bottom
@@ -144,57 +196,91 @@
 		</div>
 	</header>
 
-	<!-- Chat Area -->
-	<div bind:this={chatContainer} class="flex-1 overflow-y-auto">
-		{#if $messages.length === 0}
-			<!-- Empty State -->
-			<div class="flex h-full flex-col items-center justify-center p-8 text-center">
-				<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-secondary">
-					<Zap class="h-8 w-8 text-muted-foreground" />
-				</div>
-				<h2 class="mb-2 text-xl font-semibold">Marathon Agent</h2>
-				<p class="mb-6 max-w-md text-sm text-muted-foreground">
-					I'm an autonomous agent that can execute multi-step tasks. 
-					I can run code, do calculations, and work through complex problems step by step.
-				</p>
-				<div class="flex flex-wrap justify-center gap-2">
-					{#each [
-						'Calculate factorial of 10 and verify with code',
-						'What is the current time?',
-						'Write Python code to generate the first 20 Fibonacci numbers'
-					] as suggestion}
-						<button
-							on:click={() => handleSubmit(new CustomEvent('submit', { detail: suggestion }))}
-							class="rounded-full bg-secondary px-4 py-2 text-sm hover:bg-secondary/80"
-						>
-							{suggestion}
-						</button>
-					{/each}
-				</div>
-			</div>
-		{:else}
-			<!-- Messages -->
-			<div class="divide-y divide-border">
-				{#each $messages as message (message.id)}
-					<ChatMessage {message} />
-				{/each}
-
-				{#if $isLoading}
-					<div class="flex gap-4 p-4">
-						<div class="flex h-8 w-8 items-center justify-center rounded-full bg-accent">
-							<Bot class="h-4 w-4" />
-						</div>
-						<div class="flex items-center gap-2">
-							<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 0ms"></div>
-							<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 150ms"></div>
-							<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 300ms"></div>
-						</div>
-					</div>
-				{/if}
-			</div>
-		{/if}
+	<!-- Tabs -->
+	<div class="flex gap-1 border-b border-border px-6">
+		<button
+			on:click={() => (activeTab = 'chat')}
+			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeTab === 'chat' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<MessageSquare class="h-4 w-4" />
+			Chat
+		</button>
+		<button
+			on:click={() => (activeTab = 'analyze')}
+			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeTab === 'analyze' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<Code class="h-4 w-4" />
+			Analyze Repo
+			<span class="rounded bg-primary/20 px-1.5 py-0.5 text-xs">New</span>
+		</button>
 	</div>
 
-	<!-- Input -->
-	<ChatInput on:submit={handleSubmit} loading={$isLoading} disabled={connectionStatus !== 'connected'} />
+	<!-- Content Area -->
+	{#if activeTab === 'analyze'}
+		<!-- Analyze Tab -->
+		<div class="flex-1 overflow-y-auto p-6">
+			<div class="mx-auto max-w-2xl">
+				<RepoAnalyzer on:analyze={handleAnalyze} />
+			</div>
+		</div>
+	{:else}
+		<!-- Chat Tab -->
+		<div bind:this={chatContainer} class="flex-1 overflow-y-auto">
+			{#if $messages.length === 0}
+				<!-- Empty State -->
+				<div class="flex h-full flex-col items-center justify-center p-8 text-center">
+					<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-secondary">
+						<Zap class="h-8 w-8 text-muted-foreground" />
+					</div>
+					<h2 class="mb-2 text-xl font-semibold">Marathon Agent</h2>
+					<p class="mb-6 max-w-md text-sm text-muted-foreground">
+						I'm an autonomous agent that can execute multi-step tasks. 
+						I can run code, do calculations, and work through complex problems step by step.
+					</p>
+					<div class="flex flex-wrap justify-center gap-2">
+						{#each [
+							'Calculate factorial of 10 and verify with code',
+							'What is the current time?',
+							'Write Python code to generate the first 20 Fibonacci numbers'
+						] as suggestion}
+							<button
+								on:click={() => handleSubmit(new CustomEvent('submit', { detail: suggestion }))}
+								class="rounded-full bg-secondary px-4 py-2 text-sm hover:bg-secondary/80"
+							>
+								{suggestion}
+							</button>
+						{/each}
+					</div>
+				</div>
+			{:else}
+				<!-- Messages -->
+				<div class="divide-y divide-border">
+					{#each $messages as message (message.id)}
+						<ChatMessage {message} />
+					{/each}
+
+					{#if $isLoading || isAnalyzing}
+						<div class="flex gap-4 p-4">
+							<div class="flex h-8 w-8 items-center justify-center rounded-full bg-accent">
+								<Bot class="h-4 w-4" />
+							</div>
+							<div class="flex flex-col gap-1">
+								<div class="flex items-center gap-2">
+									<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 0ms"></div>
+									<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 150ms"></div>
+									<div class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay: 300ms"></div>
+								</div>
+								{#if isAnalyzing}
+									<span class="text-xs text-muted-foreground">Analyzing repository... this may take 1-2 minutes</span>
+								{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
+
+		<!-- Input -->
+		<ChatInput on:submit={handleSubmit} loading={$isLoading || isAnalyzing} disabled={connectionStatus !== 'connected'} />
+	{/if}
 </div>

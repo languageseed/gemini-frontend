@@ -189,7 +189,58 @@ class ApiClient {
 		
 		return res.json();
 	}
+
+	/**
+	 * Analyze a GitHub repository (v3 - Hackathon Feature)
+	 */
+	async analyzeRepo(request: AnalyzeRepoRequest): Promise<AnalyzeRepoResponse> {
+		const res = await fetch(`${API_BASE}/v3/analyze`, {
+			method: 'POST',
+			headers: this.getHeaders(),
+			body: JSON.stringify(request)
+		});
+		
+		if (!res.ok) {
+			const error = await res.json().catch(() => ({ detail: res.statusText }));
+			throw new Error(error.detail || `Request failed: ${res.status}`);
+		}
+		
+		return res.json();
+	}
+
+	/**
+	 * List codebase analyst tools (v3)
+	 */
+	async codebaseTools(): Promise<ToolDefinition[]> {
+		const res = await fetch(`${API_BASE}/v3/tools`);
+		if (!res.ok) throw new Error(`Failed to fetch tools: ${res.status}`);
+		const data = await res.json();
+		return data.tools;
+	}
+}
+
+// V3 Types - Codebase Analyst
+interface AnalyzeRepoRequest {
+	repo_url: string;
+	focus?: 'bugs' | 'security' | 'performance' | 'architecture' | 'all';
+	branch?: string;
+	path_filter?: string;
+	session_id?: string;
+}
+
+interface AnalyzeRepoResponse {
+	analysis: string;
+	repo_url: string;
+	files_analyzed: number;
+	issues_found: number;
+	tool_calls: ToolCall[];
+	iterations: number;
+	session_id: string | null;
+	completed: boolean;
 }
 
 export const api = new ApiClient();
-export type { AgentRequest, AgentResponse, ToolCall, HealthResponse, ToolDefinition, SSEEvent, SSEEventType };
+export type { 
+	AgentRequest, AgentResponse, ToolCall, HealthResponse, ToolDefinition, 
+	SSEEvent, SSEEventType, AnalyzeRepoRequest, AnalyzeRepoResponse 
+};
