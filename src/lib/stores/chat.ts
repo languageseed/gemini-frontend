@@ -1,15 +1,20 @@
 import { writable, derived } from 'svelte/store';
 
+export interface ToolCall {
+	name: string;
+	arguments: Record<string, unknown>;
+}
+
 export interface Message {
 	id: string;
 	role: 'user' | 'assistant';
 	content: string;
 	timestamp: Date;
-	toolCalls?: Array<{
-		name: string;
-		arguments: Record<string, unknown>;
-	}>;
+	toolCalls?: ToolCall[];
 	iterations?: number;
+	sessionId?: string | null;
+	completed?: boolean;
+	thinkingLevel?: string;
 }
 
 function createChatStore() {
@@ -27,13 +32,13 @@ function createChatStore() {
 				}
 			]);
 		},
-		updateLastMessage: (content: string) => {
+		updateLastMessage: (updates: Partial<Message>) => {
 			update((messages) => {
 				if (messages.length === 0) return messages;
 				const updated = [...messages];
 				updated[updated.length - 1] = {
 					...updated[updated.length - 1],
-					content
+					...updates
 				};
 				return updated;
 			});
@@ -46,6 +51,7 @@ function createChatStore() {
 export const messages = createChatStore();
 export const isLoading = writable(false);
 export const error = writable<string | null>(null);
+export const currentSessionId = writable<string | null>(null);
 
 // Derived store for message count
 export const messageCount = derived(messages, ($messages) => $messages.length);
