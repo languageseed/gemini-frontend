@@ -3,7 +3,8 @@
 	import { 
 		Github, Search, Loader2, AlertCircle, CheckCircle, Code, Zap, 
 		Shield, Bug, Layout, Clock, Activity, Brain, Wrench, 
-		ChevronDown, ChevronUp, BarChart3, Timer, Beaker
+		ChevronDown, ChevronUp, BarChart3, Timer, Beaker, XCircle,
+		FileCode, FlaskConical, Play, CheckCheck
 	} from 'lucide-svelte';
 	import { api } from '$lib/utils/api';
 	import AnalysisResults from './AnalysisResults.svelte';
@@ -15,7 +16,7 @@
 
 	let repoUrl = '';
 	let focus = 'all';
-	let verifyFindings = true;  // NEW: Toggle for verified analysis
+	let verifyFindings = true;
 	let isAnalyzing = false;
 	let error: string | null = null;
 	
@@ -32,10 +33,16 @@
 	let currentStep = '';
 	let issuesFound: any[] = [];
 	let verifiedCount = 0;
+	let unverifiedCount = 0;
+	
+	// Verification tracking
+	let currentlyVerifying: string | null = null;
+	let verificationLog: VerificationEntry[] = [];
 	
 	// Event log
 	let events: ProgressEvent[] = [];
 	let showFullLog = false;
+	let showIssuesList = true;
 
 	interface ProgressEvent {
 		type: string;
@@ -43,6 +50,15 @@
 		timestamp: Date;
 		data?: any;
 		phase?: string;
+	}
+
+	interface VerificationEntry {
+		issueId: string;
+		issueTitle: string;
+		status: 'pending' | 'generating' | 'running' | 'verified' | 'unverified' | 'error';
+		testCode?: string;
+		output?: string;
+		timestamp: Date;
 	}
 
 	const focusOptions = [
@@ -94,10 +110,13 @@
 		events = [];
 		issuesFound = [];
 		verifiedCount = 0;
+		unverifiedCount = 0;
 		currentPhase = 'init';
 		currentStep = '';
 		error = null;
 		analysisResult = null;
+		currentlyVerifying = null;
+		verificationLog = [];
 	}
 
 	async function handleSubmit() {
@@ -219,27 +238,77 @@
 				currentPhase = event.phase || currentPhase;
 				currentStep = event.message || `Phase: ${event.phase}`;
 				addEvent('thinking', event.message || event.phase, event.phase);
+				
+				// Update phase-specific UI
+				if (event.phase === 'verification') {
+					currentPhase = 'verification';
+				} else if (event.phase === 'extraction_complete') {
+					addEvent('info', `Found ${event.count || issuesFound.length} issues to verify`, 'extraction');
+				}
 				break;
 				
 			case 'tool_start':
 				currentStep = `Running: ${event.name}`;
 				if (event.name === 'clone_repo') {
 					currentPhase = 'clone';
+					addEvent('tool', `Cloning repository...`, 'clone', event);
+				} else if (event.name === 'verify_issue') {
+					// Starting verification of an issue
+					currentPhase = 'verification';
+					currentlyVerifying = event.issue_id;
+					const issueTitle = event.issue_title || event.issue_id;
+					currentStep = `Verifying: ${issueTitle}`;
+					
+					// Add to verification log
+					verificationLog = [...verificationLog, {
+						issueId: event.issue_id,
+						issueTitle: issueTitle,
+						status: 'generating',
+						timestamp: new Date(),
+					}];
+					
+					addEvent('verify_start', `🧪 Generating test for: ${issueTitle}`, 'verification', event);
+				} else {
+					addEvent('tool', `Started: ${event.name}`, undefined, event);
 				}
-				addEvent('tool', `Started: ${event.name}`, undefined, event);
 				break;
 				
 			case 'tool_result':
 				if (event.name === 'issue_found' && event.issue) {
+					// New issue discovered
 					issuesFound = [...issuesFound, event.issue];
-					addEvent('issue', `Found: ${event.issue.title}`, undefined, event.issue);
+					addEvent('issue', `🔍 Found: ${event.issue.title} [${event.issue.severity?.toUpperCase()}]`, 'extraction', event.issue);
 				} else if (event.name === 'verify_issue') {
+					// Verification result
+					currentlyVerifying = null;
+					
+					// Update verification log entry
+					verificationLog = verificationLog.map(entry => 
+						entry.issueId === event.issue_id 
+							? { ...entry, status: event.status, output: event.message }
+							: entry
+					);
+					
 					if (event.status === 'verified') {
 						verifiedCount++;
-						addEvent('verified', `✓ Verified: ${event.issue_id}`, 'verification');
-					} else {
-						addEvent('unverified', `? Unverified: ${event.issue_id}`, 'verification');
+						addEvent('verified', `✅ VERIFIED: ${event.issue_id} - Test failed as expected!`, 'verification');
+					} else if (event.status === 'unverified') {
+						unverifiedCount++;
+						addEvent('unverified', `⚠️ Unverified: ${event.issue_id} - Test passed (may be false positive)`, 'verification');
+					} else if (event.status === 'error') {
+						addEvent('error', `❌ Error verifying ${event.issue_id}: ${event.message}`, 'verification');
 					}
+					
+					// Update current step
+					const remaining = issuesFound.length - verifiedCount - unverifiedCount;
+					if (remaining > 0) {
+						currentStep = `Verified ${verifiedCount + unverifiedCount}/${issuesFound.length} issues...`;
+					} else {
+						currentStep = 'Verification complete!';
+					}
+				} else if (event.name === 'clone_repo') {
+					addEvent('result', `✓ Repository cloned successfully`, 'clone', event);
+					currentPhase = 'analysis';
 				} else {
 					addEvent('result', `Completed: ${event.name}`, undefined, event);
 				}
@@ -414,68 +483,177 @@
 					</div>
 				</div>
 
-				<!-- Metrics Grid -->
-				<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-					<div class="rounded-lg bg-secondary/50 p-3">
-						<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-							<Bug class="h-3 w-3" />
-							Issues Found
-						</div>
-						<div class="text-lg font-semibold">{issuesFound.length}</div>
+			<!-- Metrics Grid -->
+			<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+				<div class="rounded-lg bg-secondary/50 p-3">
+					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+						<Bug class="h-3 w-3" />
+						Issues Found
 					</div>
-					<div class="rounded-lg bg-green-500/10 border border-green-500/20 p-3">
-						<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-							<CheckCircle class="h-3 w-3 text-green-400" />
-							Verified
-						</div>
-						<div class="text-lg font-semibold text-green-400">{verifiedCount}</div>
-					</div>
-					<div class="rounded-lg bg-secondary/50 p-3">
-						<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-							<Clock class="h-3 w-3" />
-							Elapsed
-						</div>
-						<div class="text-lg font-semibold">{formatTime(elapsedSeconds)}</div>
-					</div>
+					<div class="text-lg font-semibold">{issuesFound.length}</div>
 				</div>
-
-				<!-- Current Step -->
-				{#if isAnalyzing && currentStep}
-					<div class="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 p-3">
-						<Loader2 class="h-4 w-4 animate-spin text-primary" />
-						<span class="text-sm font-medium">{currentStep}</span>
+				<div class="rounded-lg bg-green-500/10 border border-green-500/20 p-3">
+					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+						<CheckCircle class="h-3 w-3 text-green-400" />
+						Verified
 					</div>
-				{/if}
+					<div class="text-lg font-semibold text-green-400">{verifiedCount}</div>
+				</div>
+				<div class="rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-3">
+					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+						<XCircle class="h-3 w-3 text-yellow-400" />
+						Unverified
+					</div>
+					<div class="text-lg font-semibold text-yellow-400">{unverifiedCount}</div>
+				</div>
+				<div class="rounded-lg bg-secondary/50 p-3">
+					<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+						<Clock class="h-3 w-3" />
+						Elapsed
+					</div>
+					<div class="text-lg font-semibold">{formatTime(elapsedSeconds)}</div>
+				</div>
+			</div>
 
-				<!-- Event Log Toggle -->
-				<button
-					type="button"
-					on:click={() => showFullLog = !showFullLog}
-					class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-				>
-					{#if showFullLog}
-						<ChevronUp class="h-3 w-3" />
-						Hide event log
-					{:else}
-						<ChevronDown class="h-3 w-3" />
-						Show event log ({events.length} events)
+			<!-- Current Step -->
+			{#if isAnalyzing && currentStep}
+				<div class="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 p-3">
+					<Loader2 class="h-4 w-4 animate-spin text-primary" />
+					<span class="text-sm font-medium">{currentStep}</span>
+				</div>
+			{/if}
+
+			<!-- Live Issues List -->
+			{#if issuesFound.length > 0}
+				<div class="space-y-2">
+					<button
+						type="button"
+						on:click={() => showIssuesList = !showIssuesList}
+						class="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+					>
+						{#if showIssuesList}
+							<ChevronUp class="h-3 w-3" />
+						{:else}
+							<ChevronDown class="h-3 w-3" />
+						{/if}
+						Issues Found ({issuesFound.length})
+					</button>
+					
+					{#if showIssuesList}
+						<div class="space-y-1 max-h-48 overflow-y-auto">
+							{#each issuesFound as issue, i}
+								{@const verifyEntry = verificationLog.find(v => v.issueId === issue.id)}
+								{@const isCurrentlyVerifying = currentlyVerifying === issue.id}
+								<div class="flex items-center gap-2 rounded bg-secondary/30 p-2 text-xs {isCurrentlyVerifying ? 'ring-1 ring-primary' : ''}">
+									<!-- Severity Badge -->
+									<span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase
+										{issue.severity === 'critical' ? 'bg-red-500 text-white' : 
+										 issue.severity === 'high' ? 'bg-orange-500 text-white' : 
+										 issue.severity === 'medium' ? 'bg-yellow-500 text-black' : 
+										 'bg-gray-500 text-white'}">
+										{issue.severity?.slice(0, 4) || 'MED'}
+									</span>
+									
+									<!-- Issue Title -->
+									<span class="flex-1 truncate" title={issue.title}>
+										{issue.title}
+									</span>
+									
+									<!-- Verification Status -->
+									<span class="shrink-0 flex items-center gap-1">
+										{#if isCurrentlyVerifying}
+											<Loader2 class="h-3 w-3 animate-spin text-primary" />
+											<span class="text-primary">Testing...</span>
+										{:else if verifyEntry?.status === 'verified'}
+											<CheckCircle class="h-3 w-3 text-green-400" />
+											<span class="text-green-400">Verified</span>
+										{:else if verifyEntry?.status === 'unverified'}
+											<XCircle class="h-3 w-3 text-yellow-400" />
+											<span class="text-yellow-400">Unverified</span>
+										{:else if verifyEntry?.status === 'error'}
+											<AlertCircle class="h-3 w-3 text-red-400" />
+											<span class="text-red-400">Error</span>
+										{:else if currentPhase === 'verification'}
+											<Clock class="h-3 w-3 text-muted-foreground" />
+											<span class="text-muted-foreground">Pending</span>
+										{:else}
+											<span class="text-muted-foreground">—</span>
+										{/if}
+									</span>
+								</div>
+							{/each}
+						</div>
 					{/if}
-				</button>
+				</div>
+			{/if}
 
-				<!-- Full Event Log -->
-				{#if showFullLog}
-					<div class="max-h-48 overflow-y-auto rounded bg-secondary/30 p-2 text-xs font-mono space-y-1">
-						{#each events as event}
-							<div class="flex gap-2 py-0.5 {event.type === 'error' ? 'text-destructive' : event.type === 'verified' ? 'text-green-400' : event.type === 'issue' ? 'text-yellow-400' : 'text-muted-foreground'}">
-								<span class="text-[10px] opacity-50 w-16 flex-shrink-0">
-									{event.timestamp.toLocaleTimeString()}
-								</span>
-								<span class="text-primary/70">[{event.type}]</span>
-								<span class="flex-1">{event.message}</span>
+			<!-- Verification Progress -->
+			{#if currentPhase === 'verification' && verificationLog.length > 0}
+				<div class="space-y-2">
+					<div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+						<FlaskConical class="h-3 w-3" />
+						Verification Progress
+					</div>
+					<div class="rounded bg-secondary/30 p-2 space-y-1 max-h-32 overflow-y-auto">
+						{#each verificationLog as entry}
+							<div class="flex items-center gap-2 text-xs">
+								{#if entry.status === 'generating'}
+									<Loader2 class="h-3 w-3 animate-spin text-blue-400" />
+									<span class="text-blue-400">Generating test...</span>
+								{:else if entry.status === 'running'}
+									<Play class="h-3 w-3 text-purple-400" />
+									<span class="text-purple-400">Running test...</span>
+								{:else if entry.status === 'verified'}
+									<CheckCheck class="h-3 w-3 text-green-400" />
+									<span class="text-green-400">✓ Bug confirmed!</span>
+								{:else if entry.status === 'unverified'}
+									<XCircle class="h-3 w-3 text-yellow-400" />
+									<span class="text-yellow-400">Test passed</span>
+								{:else if entry.status === 'error'}
+									<AlertCircle class="h-3 w-3 text-red-400" />
+									<span class="text-red-400">Error</span>
+								{/if}
+								<span class="flex-1 truncate text-muted-foreground">{entry.issueTitle}</span>
 							</div>
 						{/each}
 					</div>
+				</div>
+			{/if}
+
+			<!-- Event Log Toggle -->
+			<button
+				type="button"
+				on:click={() => showFullLog = !showFullLog}
+				class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+			>
+				{#if showFullLog}
+					<ChevronUp class="h-3 w-3" />
+					Hide event log
+				{:else}
+					<ChevronDown class="h-3 w-3" />
+					Show event log ({events.length} events)
 				{/if}
+			</button>
+
+			<!-- Full Event Log -->
+			{#if showFullLog}
+				<div class="max-h-48 overflow-y-auto rounded bg-secondary/30 p-2 text-xs font-mono space-y-1">
+					{#each events as event}
+						<div class="flex gap-2 py-0.5 
+							{event.type === 'error' ? 'text-destructive' : 
+							 event.type === 'verified' ? 'text-green-400' : 
+							 event.type === 'unverified' ? 'text-yellow-400' :
+							 event.type === 'issue' ? 'text-orange-400' : 
+							 event.type === 'verify_start' ? 'text-blue-400' :
+							 'text-muted-foreground'}">
+							<span class="text-[10px] opacity-50 w-16 flex-shrink-0">
+								{event.timestamp.toLocaleTimeString()}
+							</span>
+							<span class="flex-1">{event.message}</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
 			</div>
 		{/if}
 	{/if}
