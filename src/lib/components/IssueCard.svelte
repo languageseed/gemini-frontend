@@ -19,6 +19,10 @@
 		verification_status: 'pending' | 'verified' | 'unverified' | 'skipped' | 'error';
 		test_code?: string;
 		test_output?: string;
+		// New fix fields
+		fix_code?: string;
+		fix_description?: string;
+		fix_verified?: boolean;
 	};
 
 	let expanded = false;
@@ -170,8 +174,37 @@
 				</div>
 			{/if}
 
-			<!-- Recommended Fix -->
-			{#if issue.recommended_code}
+			<!-- AI-Generated Fix (for verified issues) -->
+			{#if issue.fix_code && issue.verification_status === 'verified'}
+				<div class="rounded-lg bg-green-500/10 border-2 border-green-500/30 p-4">
+					<div class="flex items-center justify-between mb-2">
+						<div class="text-sm font-medium text-green-400 flex items-center gap-2">
+							✨ AI-Generated Fix
+							{#if issue.fix_verified}
+								<span class="text-xs bg-green-500/20 px-2 py-0.5 rounded">Verified</span>
+							{/if}
+						</div>
+						<button
+							type="button"
+							on:click={() => copyToClipboard(issue.fix_code || '', 'fix')}
+							class="text-xs text-green-400 hover:text-green-300 flex items-center gap-1"
+						>
+							{#if copiedFix}
+								<Check class="h-3 w-3" />
+								Copied
+							{:else}
+								<Copy class="h-3 w-3" />
+								Copy Fix
+							{/if}
+						</button>
+					</div>
+					{#if issue.fix_description}
+						<p class="text-sm text-green-300/80 mb-2">{issue.fix_description}</p>
+					{/if}
+					<pre class="rounded bg-black/30 p-3 text-xs overflow-x-auto font-mono text-green-300">{issue.fix_code}</pre>
+				</div>
+			{:else if issue.recommended_code}
+				<!-- Fallback to recommended fix -->
 				<div>
 					<div class="flex items-center justify-between mb-1">
 						<div class="text-xs font-medium text-muted-foreground">Suggested Fix</div>

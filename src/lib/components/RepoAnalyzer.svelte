@@ -268,6 +268,12 @@
 					}];
 					
 					addEvent('verify_start', `🧪 Generating test for: ${issueTitle}`, 'verification', event);
+				} else if (event.name === 'generate_fix') {
+					// Starting fix generation
+					currentPhase = 'fix_generation';
+					const fixTitle = event.issue_title || event.issue_id;
+					currentStep = `Generating fix for: ${fixTitle}`;
+					addEvent('fix_start', `🔧 Generating fix for: ${fixTitle}`, 'fix_generation', event);
 				} else {
 					addEvent('tool', `Started: ${event.name}`, undefined, event);
 				}
@@ -309,6 +315,15 @@
 				} else if (event.name === 'clone_repo') {
 					addEvent('result', `✓ Repository cloned successfully`, 'clone', event);
 					currentPhase = 'analysis';
+				} else if (event.name === 'generate_fix') {
+					// Fix generation result
+					if (event.status === 'success') {
+						addEvent('fix_done', `✨ Fix generated: ${event.fix_description?.slice(0, 50)}...`, 'fix_generation');
+					} else if (event.status === 'partial') {
+						addEvent('fix_partial', `⚠️ Partial fix: ${event.message}`, 'fix_generation');
+					} else if (event.status === 'error') {
+						addEvent('fix_error', `❌ Fix error: ${event.message}`, 'fix_generation');
+					}
 				} else {
 					addEvent('result', `Completed: ${event.name}`, undefined, event);
 				}
