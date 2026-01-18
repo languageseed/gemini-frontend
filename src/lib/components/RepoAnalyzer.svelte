@@ -50,8 +50,8 @@
 		iteration = 0;
 
 		try {
-			// Get API key from localStorage
-			const apiKey = localStorage.getItem('api_key') || '';
+			// Get API key from api utility
+			const apiKey = api.getApiKey() || '';
 			
 			// Build SSE URL
 			const baseUrl = import.meta.env.VITE_API_URL || 'https://gemini-agent-hackathon-production.up.railway.app';

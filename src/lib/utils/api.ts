@@ -55,18 +55,37 @@ interface SSEEvent {
 // API CLIENT
 // ============================================================
 
+const API_KEY_STORAGE_KEY = 'gemini_api_key';
+
 class ApiClient {
 	private apiKey: string | null = null;
 
+	constructor() {
+		// Load API key from localStorage on initialization
+		if (typeof window !== 'undefined') {
+			this.apiKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+		}
+	}
+
 	setApiKey(key: string) {
 		this.apiKey = key;
+		if (typeof window !== 'undefined') {
+			localStorage.setItem(API_KEY_STORAGE_KEY, key);
+		}
 	}
 
 	clearApiKey() {
 		this.apiKey = null;
+		if (typeof window !== 'undefined') {
+			localStorage.removeItem(API_KEY_STORAGE_KEY);
+		}
 	}
 
-	private getHeaders(): HeadersInit {
+	getApiKey(): string | null {
+		return this.apiKey;
+	}
+
+	getHeaders(): HeadersInit {
 		const headers: HeadersInit = {
 			'Content-Type': 'application/json'
 		};
