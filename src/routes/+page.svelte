@@ -82,48 +82,36 @@
 		}, 100);
 	}
 
-	async function handleAnalyze(event: CustomEvent<{ repo: string; focus: string }>) {
+	function handleAnalyzeStart(event: CustomEvent<{ repo: string; focus: string }>) {
+		// Analysis is now handled in RepoAnalyzer with streaming
+		// This is called when analysis starts - we can add a user message
 		const { repo, focus } = event.detail;
-		
 		isAnalyzing = true;
 		
-		// Switch to chat tab to show results
-		activeTab = 'chat';
-		
-		// Add user message
 		messages.addMessage({
 			role: 'user',
 			content: `Analyze repository: ${repo}\nFocus: ${focus}`
 		});
+	}
 
-		try {
-			const response = await api.analyzeRepo({
-				repo_url: repo,
-				focus: focus as 'bugs' | 'security' | 'performance' | 'architecture' | 'all'
-			});
+	function handleAnalyzeComplete(event: CustomEvent<{ analysis: string; toolCalls: any[]; iterations: number }>) {
+		const { analysis, toolCalls, iterations } = event.detail;
+		
+		// Add the analysis result to chat
+		messages.addMessage({
+			role: 'assistant',
+			content: analysis,
+			toolCalls: toolCalls,
+			iterations: iterations,
+			completed: true
+		});
 
-			messages.addMessage({
-				role: 'assistant',
-				content: response.analysis,
-				toolCalls: response.tool_calls,
-				iterations: response.iterations,
-				sessionId: response.session_id,
-				completed: response.completed
-			});
-
-			toast.success(`Analyzed ${response.files_analyzed} files, found ${response.issues_found} issues`);
-		} catch (e) {
-			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
-			toast.error(errorMessage);
-			
-			messages.addMessage({
-				role: 'assistant',
-				content: `Analysis failed: ${errorMessage}`,
-				completed: false
-			});
-		} finally {
-			isAnalyzing = false;
-		}
+		isAnalyzing = false;
+		
+		// Switch to chat tab to show results
+		activeTab = 'chat';
+		
+		toast.success(`Analysis complete in ${iterations} iterations`);
 
 		// Scroll to bottom
 		setTimeout(() => {
@@ -220,7 +208,7 @@
 		<!-- Analyze Tab -->
 		<div class="flex-1 overflow-y-auto p-6">
 			<div class="mx-auto max-w-2xl">
-				<RepoAnalyzer on:analyze={handleAnalyze} />
+				<RepoAnalyzer on:analyze={handleAnalyzeStart} on:complete={handleAnalyzeComplete} />
 			</div>
 		</div>
 	{:else}

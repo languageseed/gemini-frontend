@@ -1,34 +1,208 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
-	import { Github, Search, Loader2, AlertCircle } from 'lucide-svelte';
+	import { Github, Search, Loader2, AlertCircle, CheckCircle, Code, Zap, Shield, Bug, Layout } from 'lucide-svelte';
+	import { api } from '$lib/utils/api';
 
-	const dispatch = createEventDispatcher<{ analyze: { repo: string; focus: string } }>();
+	const dispatch = createEventDispatcher<{ 
+		analyze: { repo: string; focus: string };
+		complete: { analysis: string; toolCalls: any[]; iterations: number };
+	}>();
 
 	let repoUrl = '';
 	let focus = 'all';
 	let isAnalyzing = false;
 	let error: string | null = null;
+	
+	// Progress state
+	let progressEvents: ProgressEvent[] = [];
+	let currentStep = '';
+	let iteration = 0;
+
+	interface ProgressEvent {
+		type: string;
+		message: string;
+		timestamp: Date;
+		data?: any;
+	}
 
 	const focusOptions = [
-		{ value: 'all', label: 'Full Analysis', description: 'Bugs, security, performance, architecture' },
-		{ value: 'bugs', label: 'Bug Detection', description: 'Logic errors, edge cases, error handling' },
-		{ value: 'security', label: 'Security Audit', description: 'Vulnerabilities, injection risks, auth issues' },
-		{ value: 'performance', label: 'Performance', description: 'Bottlenecks, inefficient algorithms' },
-		{ value: 'architecture', label: 'Architecture', description: 'Patterns, modularity, maintainability' },
+		{ value: 'all', label: 'Full Analysis', description: 'Bugs, security, performance, architecture', icon: Zap },
+		{ value: 'bugs', label: 'Bug Detection', description: 'Logic errors, edge cases, error handling', icon: Bug },
+		{ value: 'security', label: 'Security Audit', description: 'Vulnerabilities, injection risks, auth issues', icon: Shield },
+		{ value: 'performance', label: 'Performance', description: 'Bottlenecks, inefficient algorithms', icon: Zap },
+		{ value: 'architecture', label: 'Architecture', description: 'Patterns, modularity, maintainability', icon: Layout },
 	];
 
-	function handleSubmit() {
+	function addProgress(type: string, message: string, data?: any) {
+		progressEvents = [...progressEvents, { type, message, timestamp: new Date(), data }];
+	}
+
+	async function handleSubmit() {
 		if (!repoUrl.trim()) {
 			error = 'Please enter a repository URL';
 			return;
 		}
 
 		error = null;
-		dispatch('analyze', { repo: repoUrl.trim(), focus });
+		isAnalyzing = true;
+		progressEvents = [];
+		currentStep = 'Connecting to server...';
+		iteration = 0;
+
+		try {
+			// Get API key from localStorage
+			const apiKey = localStorage.getItem('api_key') || '';
+			
+			// Build SSE URL
+			const baseUrl = import.meta.env.VITE_API_URL || 'https://gemini-agent-hackathon-production.up.railway.app';
+			
+			addProgress('start', `Starting analysis of ${repoUrl}`);
+			currentStep = 'Initializing agent...';
+
+			// Use fetch with streaming
+			const response = await fetch(`${baseUrl}/v3/analyze/stream`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-API-Key': apiKey,
+				},
+				body: JSON.stringify({
+					repo_url: repoUrl.trim(),
+					focus,
+				}),
+			});
+
+			if (!response.ok) {
+				const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+				throw new Error(errorData.detail || `Request failed: ${response.status}`);
+			}
+
+			// Read the SSE stream
+			const reader = response.body?.getReader();
+			const decoder = new TextDecoder();
+
+			if (!reader) {
+				throw new Error('Failed to get response stream');
+			}
+
+			let buffer = '';
+
+			while (true) {
+				const { done, value } = await reader.read();
+				
+				if (done) break;
+
+				buffer += decoder.decode(value, { stream: true });
+				
+				// Process complete SSE events (split by double newline)
+				const events = buffer.split('\n\n');
+				buffer = events.pop() || ''; // Keep incomplete event in buffer
+
+				for (const eventStr of events) {
+					if (!eventStr.trim() || !eventStr.startsWith('data:')) continue;
+					
+					try {
+						const jsonStr = eventStr.replace('data:', '').trim();
+						const event = JSON.parse(jsonStr);
+						
+						handleStreamEvent(event);
+						
+						// Check if done
+						if (event.type === 'done') {
+							dispatch('complete', {
+								analysis: event.analysis || '',
+								toolCalls: event.tool_calls || [],
+								iterations: event.iterations || 0,
+							});
+							isAnalyzing = false;
+							currentStep = 'Analysis complete!';
+							addProgress('done', `Completed in ${event.iterations} iterations`);
+							return;
+						}
+						
+						if (event.type === 'error') {
+							throw new Error(event.error || 'Unknown error');
+						}
+					} catch (parseError) {
+						console.warn('Failed to parse SSE event:', eventStr, parseError);
+					}
+				}
+			}
+
+		} catch (e) {
+			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			error = errorMessage;
+			addProgress('error', errorMessage);
+		} finally {
+			isAnalyzing = false;
+		}
+	}
+
+	function handleStreamEvent(event: any) {
+		switch (event.type) {
+			case 'start':
+				currentStep = 'Agent started...';
+				addProgress('start', `Task: ${event.task?.substring(0, 100) || 'Analyzing repository'}...`);
+				break;
+				
+			case 'thinking':
+				iteration = event.iteration || iteration;
+				currentStep = `Iteration ${iteration}: Reasoning (${event.level} thinking)...`;
+				addProgress('thinking', `Iteration ${event.iteration}: ${event.level} thinking`);
+				break;
+				
+			case 'tool_start':
+				const toolName = event.name || 'Unknown tool';
+				const toolMessage = getToolMessage(toolName, event.arguments);
+				currentStep = toolMessage;
+				addProgress('tool', toolMessage, event);
+				break;
+				
+			case 'tool_result':
+				const resultPreview = event.output?.substring(0, 100) || 'Completed';
+				addProgress('result', `${event.name}: ${resultPreview}...`, event);
+				break;
+				
+			case 'token':
+				// Could show streaming text here
+				currentStep = 'Generating analysis...';
+				break;
+				
+			case 'heartbeat':
+				// Keep-alive, no action needed
+				break;
+		}
+	}
+
+	function getToolMessage(toolName: string, args?: any): string {
+		switch (toolName) {
+			case 'clone_repo':
+				return `Cloning repository: ${args?.repo_url || repoUrl}...`;
+			case 'analyze_code':
+				return `Analyzing code: ${args?.path || 'files'}...`;
+			case 'execute_code':
+				return 'Executing verification code...';
+			case 'search_code':
+				return `Searching for: ${args?.query || 'patterns'}...`;
+			default:
+				return `Running: ${toolName}...`;
+		}
 	}
 
 	function setExample(url: string) {
 		repoUrl = url;
+	}
+
+	function getEventIcon(type: string) {
+		switch (type) {
+			case 'start': return Zap;
+			case 'thinking': return Code;
+			case 'tool': return Github;
+			case 'result': return CheckCircle;
+			case 'done': return CheckCircle;
+			case 'error': return AlertCircle;
+			default: return Code;
+		}
 	}
 </script>
 
@@ -96,6 +270,38 @@
 				{/each}
 			</div>
 		</div>
+
+		<!-- Progress Display -->
+		{#if isAnalyzing || progressEvents.length > 0}
+			<div class="rounded-lg border border-border bg-background p-4">
+				<!-- Current Step -->
+				{#if isAnalyzing}
+					<div class="mb-3 flex items-center gap-2">
+						<Loader2 class="h-4 w-4 animate-spin text-primary" />
+						<span class="text-sm font-medium">{currentStep}</span>
+						{#if iteration > 0}
+							<span class="rounded bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
+								Iteration {iteration}
+							</span>
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Progress Log -->
+				<div class="max-h-48 space-y-1 overflow-y-auto text-xs">
+					{#each progressEvents as event, i}
+						{@const Icon = getEventIcon(event.type)}
+						<div class="flex items-start gap-2 py-1 {event.type === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
+							<Icon class="mt-0.5 h-3 w-3 flex-shrink-0" />
+							<span class="flex-1">{event.message}</span>
+							<span class="text-[10px] opacity-50">
+								{event.timestamp.toLocaleTimeString()}
+							</span>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
 
 		<!-- Error -->
 		{#if error}
