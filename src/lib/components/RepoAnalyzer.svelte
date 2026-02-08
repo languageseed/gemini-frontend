@@ -238,7 +238,25 @@
 			}
 
 		} catch (e) {
-			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			let errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			
+			// Detect Railway 5-minute timeout (ERR_HTTP2_PROTOCOL_ERROR or network error)
+			const isNetworkError = errorMessage.toLowerCase().includes('network') || 
+				errorMessage.toLowerCase().includes('failed to fetch') ||
+				errorMessage.toLowerCase().includes('http2') ||
+				(e instanceof TypeError && e.message === 'Failed to fetch');
+			
+			if (isNetworkError) {
+				// Check if we have partial results
+				const hasPartialResults = issuesFound > 0 || verifiedCount > 0;
+				
+				if (hasPartialResults) {
+					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results shown: ${verifiedCount}/${issuesFound} verified. For longer analyses, try smaller repositories or use the async API.`;
+				} else {
+					errorMessage = 'Connection timed out (Railway has a 5-minute limit on HTTP requests). Try a smaller repository or use the async API: POST /v4/analyze/async';
+				}
+			}
+			
 			error = errorMessage;
 			addEvent('error', errorMessage);
 			stopTimer();

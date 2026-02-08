@@ -232,12 +232,27 @@
 		} catch (e) {
 			let errorMessage = e instanceof Error ? e.message : 'Analysis failed';
 			
+			// Detect Railway 5-minute timeout (ERR_HTTP2_PROTOCOL_ERROR or network error)
+			const isNetworkError = errorMessage.toLowerCase().includes('network') || 
+				errorMessage.toLowerCase().includes('failed to fetch') ||
+				errorMessage.toLowerCase().includes('http2') ||
+				(e instanceof TypeError && e.message === 'Failed to fetch');
+			
 			// Improve error messages for common cases
 			if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
 				errorMessage = 'Authentication required. Please enter your API key in the header above.';
 				checkApiKey(); // Refresh API key state
 			} else if (errorMessage.includes('403')) {
 				errorMessage = 'Invalid API key. Please check your API key and try again.';
+			} else if (isNetworkError) {
+				// Check if we have partial results
+				const hasPartialResults = metrics.issuesFound > 0 || metrics.verified > 0;
+				
+				if (hasPartialResults) {
+					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results: ${metrics.verified}/${metrics.issuesFound} verified. Results shown below may be incomplete.`;
+				} else {
+					errorMessage = 'Connection timed out (Railway has a 5-minute limit). Try a smaller repository or the async API.';
+				}
 			}
 			
 			error = errorMessage;
