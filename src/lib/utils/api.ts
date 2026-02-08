@@ -292,6 +292,61 @@ class ApiClient {
 		const data = await res.json();
 		return data.tools;
 	}
+
+	/**
+	 * Submit an async analysis job (v4)
+	 * Uses polling instead of SSE to avoid Railway's 5-minute timeout
+	 */
+	async submitAsyncJob(request: AsyncJobRequest): Promise<AsyncJobResponse> {
+		const res = await fetch(`${API_BASE}/v4/analyze/async`, {
+			method: 'POST',
+			headers: this.getHeaders(),
+			body: JSON.stringify(request)
+		});
+		
+		if (!res.ok) {
+			const error = await res.json().catch(() => ({ detail: res.statusText }));
+			throw new Error(error.detail || `Request failed: ${res.status}`);
+		}
+		
+		return res.json();
+	}
+
+	/**
+	 * Get async job status (v4)
+	 */
+	async getJobStatus(jobId: string): Promise<AsyncJobStatus> {
+		const res = await fetch(`${API_BASE}/v4/jobs/${jobId}`, {
+			headers: this.getHeaders()
+		});
+		
+		if (!res.ok) {
+			const error = await res.json().catch(() => ({ detail: res.statusText }));
+			throw new Error(error.detail || `Request failed: ${res.status}`);
+		}
+		
+		return res.json();
+	}
+
+	/**
+	 * Poll job until complete
+	 */
+	async pollJobUntilComplete(
+		jobId: string,
+		onProgress: (status: AsyncJobStatus) => void,
+		intervalMs: number = 3000
+	): Promise<AsyncJobStatus> {
+		while (true) {
+			const status = await this.getJobStatus(jobId);
+			onProgress(status);
+			
+			if (status.status === 'completed' || status.status === 'failed') {
+				return status;
+			}
+			
+			await new Promise(resolve => setTimeout(resolve, intervalMs));
+		}
+	}
 }
 
 // V3 Types - Codebase Analyst
@@ -314,8 +369,40 @@ interface AnalyzeRepoResponse {
 	completed: boolean;
 }
 
+// V4 Async Job Types
+interface AsyncJobRequest {
+	repo_url: string;
+	focus?: string;
+	verify?: boolean;
+	branch?: string;
+	webhook_url?: string;
+}
+
+interface AsyncJobResponse {
+	job_id: string;
+	status: string;
+	status_url: string;
+	estimated_seconds: number;
+}
+
+interface AsyncJobStatus {
+	job_id: string;
+	status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
+	created_at: string;
+	started_at?: string;
+	completed_at?: string;
+	result?: unknown;
+	error?: string;
+	progress?: {
+		phase: string;
+		issues_found: number;
+		verified: number;
+	};
+}
+
 export const api = new ApiClient();
 export type { 
 	AgentRequest, AgentResponse, ToolCall, HealthResponse, ToolDefinition, 
-	SSEEvent, SSEEventType, AnalyzeRepoRequest, AnalyzeRepoResponse 
+	SSEEvent, SSEEventType, AnalyzeRepoRequest, AnalyzeRepoResponse,
+	AsyncJobRequest, AsyncJobResponse, AsyncJobStatus
 };

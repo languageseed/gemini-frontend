@@ -17,8 +17,10 @@
 	let repoUrl = '';
 	let focus = 'all';
 	let verifyFindings = true;
+	let useAsyncMode = false; // Use polling instead of SSE to avoid Railway's 5-min timeout
 	let isAnalyzing = false;
 	let error: string | null = null;
+	let asyncJobId: string | null = null;
 	
 	// Pre-flight check state
 	let backendConfig: { e2b_configured?: boolean; gemini_configured?: boolean } | null = null;
@@ -139,8 +141,15 @@
 		isAnalyzing = true;
 		resetState();
 		startTimer();
+		asyncJobId = null;
 		
 		dispatch('analyze', { repo: repoUrl.trim(), focus });
+		
+		// Use async mode (polling) to avoid Railway's 5-minute timeout
+		if (useAsyncMode) {
+			await handleAsyncSubmit();
+			return;
+		}
 		
 		addEvent('start', `Starting ${verifyFindings ? 'verified ' : ''}analysis of ${repoUrl}`, 'init');
 		currentStep = 'Connecting to server...';
@@ -248,15 +257,92 @@
 			
 			if (isNetworkError) {
 				// Check if we have partial results
-				const hasPartialResults = issuesFound > 0 || verifiedCount > 0;
+				const hasPartialResults = issuesFound.length > 0 || verifiedCount > 0;
 				
 				if (hasPartialResults) {
-					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results shown: ${verifiedCount}/${issuesFound} verified. For longer analyses, try smaller repositories or use the async API.`;
+					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results shown: ${verifiedCount}/${issuesFound.length} verified. For longer analyses, try smaller repositories or use the async API.`;
 				} else {
 					errorMessage = 'Connection timed out (Railway has a 5-minute limit on HTTP requests). Try a smaller repository or use the async API: POST /v4/analyze/async';
 				}
 			}
 			
+			error = errorMessage;
+			addEvent('error', errorMessage);
+			stopTimer();
+		} finally {
+			isAnalyzing = false;
+		}
+	}
+
+	async function handleAsyncSubmit() {
+		addEvent('start', `Starting async analysis of ${repoUrl} (polling mode - no timeout)`, 'init');
+		currentStep = 'Submitting job...';
+		currentPhase = 'init';
+
+		try {
+			// Submit the async job
+			const jobResponse = await api.submitAsyncJob({
+				repo_url: repoUrl.trim(),
+				focus,
+				verify: verifyFindings,
+			});
+			
+			asyncJobId = jobResponse.job_id;
+			addEvent('info', `Job submitted: ${jobResponse.job_id}. Estimated: ${jobResponse.estimated_seconds}s`, 'init');
+			currentStep = 'Waiting for analysis to start...';
+			
+			// Poll for completion
+			const finalStatus = await api.pollJobUntilComplete(
+				jobResponse.job_id,
+				(status) => {
+					// Update UI based on job progress
+					if (status.progress) {
+						if (status.progress.phase === 'cloning') {
+							currentPhase = 'clone';
+							currentStep = 'Cloning repository...';
+						} else if (status.progress.phase === 'analyzing') {
+							currentPhase = 'analysis';
+							currentStep = 'Analyzing codebase...';
+						} else if (status.progress.phase === 'extracting') {
+							currentPhase = 'extraction';
+							currentStep = 'Extracting issues...';
+							if (status.progress.issues_found > issuesFound.length) {
+								addEvent('info', `Found ${status.progress.issues_found} issues`, 'extraction');
+							}
+						} else if (status.progress.phase === 'verifying') {
+							currentPhase = 'verification';
+							currentStep = `Verified ${status.progress.verified} issues...`;
+							verifiedCount = status.progress.verified;
+						}
+					}
+					
+					addEvent('poll', `Job status: ${status.status}`, currentPhase);
+				},
+				3000 // Poll every 3 seconds
+			);
+			
+			if (finalStatus.status === 'completed' && finalStatus.result) {
+				// Process the completed result
+				analysisResult = finalStatus.result;
+				
+				// Extract metrics from result
+				const result = finalStatus.result as any;
+				if (result.issues) {
+					issuesFound = result.issues;
+					verifiedCount = result.issues.filter((i: any) => i.verification_status === 'verified').length;
+					unverifiedCount = result.issues.filter((i: any) => i.verification_status === 'unverified').length;
+				}
+				
+				addEvent('done', `Analysis complete! Found ${issuesFound.length} issues, ${verifiedCount} verified.`, 'done');
+				currentPhase = 'done';
+				currentStep = 'Analysis complete';
+				stopTimer();
+			} else if (finalStatus.status === 'failed') {
+				throw new Error(finalStatus.error || 'Job failed');
+			}
+			
+		} catch (e) {
+			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
 			error = errorMessage;
 			addEvent('error', errorMessage);
 			stopTimer();
@@ -386,22 +472,25 @@
 	}
 
 	// Pre-flight check on mount
-	onMount(async () => {
+	onMount(() => {
 		checkApiKey();
 		const interval = setInterval(checkApiKey, 1000);
 		
-		try {
-			const health = await api.health();
-			backendConfig = health.config || null;
-			isSecured = health.secured;
-			
-			// Warn if E2B not configured and verify is enabled
-			if (backendConfig && !backendConfig.e2b_configured) {
-				configWarning = "E2B sandbox not configured - verification will use limited fallback mode";
+		// Async health check (fire and forget)
+		(async () => {
+			try {
+				const health = await api.health();
+				backendConfig = health.config || null;
+				isSecured = health.secured;
+				
+				// Warn if E2B not configured and verify is enabled
+				if (backendConfig && !backendConfig.e2b_configured) {
+					configWarning = "E2B sandbox not configured - verification will use limited fallback mode";
+				}
+			} catch (e) {
+				// Health check failed - will show as disconnected in main UI
 			}
-		} catch (e) {
-			// Health check failed - will show as disconnected in main UI
-		}
+		})();
 		
 		return () => clearInterval(interval);
 	});
@@ -481,6 +570,29 @@
 						<div class="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-green-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
 					</label>
 				</div>
+
+				<!-- Async Mode Toggle (avoids Railway timeout) -->
+				<div class="flex items-center justify-between rounded-lg border border-border bg-background p-3">
+					<div class="flex items-center gap-2">
+						<Timer class="h-4 w-4 text-blue-400" />
+						<div>
+							<div class="text-sm font-medium">Async Mode</div>
+							<div class="text-xs text-muted-foreground">Use polling for long analyses (avoids 5-min timeout)</div>
+						</div>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer">
+						<input type="checkbox" bind:checked={useAsyncMode} class="sr-only peer" disabled={isAnalyzing} />
+						<div class="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-blue-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+					</label>
+				</div>
+
+				<!-- Show Job ID when using async mode -->
+				{#if asyncJobId}
+					<div class="flex items-center gap-2 rounded-lg bg-blue-500/10 border border-blue-500/20 p-3 text-sm text-blue-400">
+						<Activity class="h-4 w-4" />
+						Job ID: <code class="font-mono">{asyncJobId}</code>
+					</div>
+				{/if}
 
 				<!-- API Key Warning -->
 				{#if isSecured && !hasApiKey}
