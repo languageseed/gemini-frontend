@@ -1,19 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { Bot, Sparkles, Github, FileText, Zap, Code, MessageSquare } from 'lucide-svelte';
+	import { Bot, Sparkles, Github, FileText, Zap, Code, MessageSquare, Heart } from 'lucide-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import ChatInput from '$lib/components/ChatInput.svelte';
 	import StatusIndicator from '$lib/components/StatusIndicator.svelte';
 	import ApiKeyInput from '$lib/components/ApiKeyInput.svelte';
 	import RepoAnalyzer from '$lib/components/RepoAnalyzer.svelte';
+	import CodeDoctor from '$lib/components/CodeDoctor.svelte';
 	import { messages, isLoading, error, currentSessionId } from '$lib/stores/chat';
 	import { api, type HealthResponse } from '$lib/utils/api';
 
 	let health: HealthResponse | null = null;
 	let connectionStatus: 'connected' | 'disconnected' | 'loading' = 'loading';
 	let chatContainer: HTMLDivElement;
-	let activeTab: 'chat' | 'analyze' = 'chat';
+	let activeTab: 'chat' | 'analyze' | 'doctor' = 'doctor';
 	let isAnalyzing = false;
 
 	onMount(async () => {
@@ -125,20 +126,20 @@
 </script>
 
 <svelte:head>
-	<title>Marathon Agent | Gemini 3 Hackathon</title>
+	<title>Code Doctor | Gemini 3 Hackathon</title>
 </svelte:head>
 
 <div class="flex h-screen flex-col">
 	<!-- Header -->
 	<header class="flex items-center justify-between border-b border-border px-6 py-4">
 		<div class="flex items-center gap-3">
-			<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
-				<Zap class="h-5 w-5" />
+			<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-emerald-600">
+				<Heart class="h-5 w-5" />
 			</div>
 			<div>
-				<h1 class="text-lg font-semibold">Marathon Agent</h1>
+				<h1 class="text-lg font-semibold">Gemini Code Doctor</h1>
 				<p class="text-xs text-muted-foreground">
-					{health?.version || 'v0.2.0'} • {health?.model || 'Gemini'}
+					{health?.version || 'v0.6.0'} • {health?.reasoning_model || health?.model || 'Gemini 3'}
 				</p>
 			</div>
 		</div>
@@ -185,24 +186,38 @@
 	<!-- Tabs -->
 	<div class="flex gap-1 border-b border-border px-6">
 		<button
-			on:click={() => (activeTab = 'chat')}
-			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeTab === 'chat' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+			on:click={() => (activeTab = 'doctor')}
+			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeTab === 'doctor' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}"
 		>
-			<MessageSquare class="h-4 w-4" />
-			Chat
+			<Heart class="h-4 w-4" />
+			Code Doctor
+			<span class="rounded bg-green-500/20 text-green-400 px-1.5 py-0.5 text-xs">New</span>
 		</button>
 		<button
 			on:click={() => (activeTab = 'analyze')}
 			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeTab === 'analyze' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}"
 		>
 			<Code class="h-4 w-4" />
-			Analyze Repo
-			<span class="rounded bg-primary/20 px-1.5 py-0.5 text-xs">New</span>
+			Verified Analysis
+		</button>
+		<button
+			on:click={() => (activeTab = 'chat')}
+			class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeTab === 'chat' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<MessageSquare class="h-4 w-4" />
+			Agent Chat
 		</button>
 	</div>
 
-	<!-- Content Area - Both tabs always mounted, CSS visibility toggle to preserve state -->
+	<!-- Content Area - All tabs always mounted, CSS visibility toggle to preserve state -->
 	<div class="flex flex-1 flex-col overflow-hidden">
+		<!-- Code Doctor Tab (always mounted) -->
+		<div class="flex-1 overflow-y-auto p-6 {activeTab === 'doctor' ? '' : 'hidden'}">
+			<div class="mx-auto max-w-3xl">
+				<CodeDoctor />
+			</div>
+		</div>
+
 		<!-- Analyze Tab (always mounted) -->
 		<div class="flex-1 overflow-y-auto p-6 {activeTab === 'analyze' ? '' : 'hidden'}">
 			<div class="mx-auto max-w-2xl">
@@ -217,12 +232,12 @@
 					<!-- Empty State -->
 					<div class="flex h-full flex-col items-center justify-center p-8 text-center">
 						<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-secondary">
-							<Zap class="h-8 w-8 text-muted-foreground" />
+							<Bot class="h-8 w-8 text-muted-foreground" />
 						</div>
-						<h2 class="mb-2 text-xl font-semibold">Marathon Agent</h2>
+						<h2 class="mb-2 text-xl font-semibold">Agent Chat</h2>
 						<p class="mb-6 max-w-md text-sm text-muted-foreground">
-							I'm an autonomous agent that can execute multi-step tasks. 
-							I can run code, do calculations, and work through complex problems step by step.
+							Chat with the Gemini-powered agent for multi-step tasks. 
+							For comprehensive code analysis, try the Code Doctor tab!
 						</p>
 						<div class="flex flex-wrap justify-center gap-2">
 							{#each [
