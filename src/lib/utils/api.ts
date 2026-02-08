@@ -32,6 +32,7 @@ interface AgentResponse {
 interface HealthResponse {
 	status: string;
 	model: string;
+	reasoning_model?: string;
 	secured: boolean;
 	version?: string;
 	capabilities?: string[];
