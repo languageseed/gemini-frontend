@@ -23,6 +23,12 @@
 	// Pre-flight check state
 	let backendConfig: { e2b_configured?: boolean; gemini_configured?: boolean } | null = null;
 	let configWarning: string | null = null;
+	let isSecured = false;
+	let hasApiKey = false;
+	
+	function checkApiKey() {
+		hasApiKey = api.hasApiKey();
+	}
 	
 	// Results state
 	let analysisResult: any = null;
@@ -363,9 +369,13 @@
 
 	// Pre-flight check on mount
 	onMount(async () => {
+		checkApiKey();
+		const interval = setInterval(checkApiKey, 1000);
+		
 		try {
 			const health = await api.health();
 			backendConfig = health.config || null;
+			isSecured = health.secured;
 			
 			// Warn if E2B not configured and verify is enabled
 			if (backendConfig && !backendConfig.e2b_configured) {
@@ -374,6 +384,8 @@
 		} catch (e) {
 			// Health check failed - will show as disconnected in main UI
 		}
+		
+		return () => clearInterval(interval);
 	});
 </script>
 
@@ -452,8 +464,18 @@
 					</label>
 				</div>
 
+				<!-- API Key Warning -->
+				{#if isSecured && !hasApiKey}
+					<div class="flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 p-3 text-sm text-yellow-400">
+						<AlertCircle class="h-4 w-4" />
+						<div>
+							<span class="font-medium">API Key Required</span> — Enter your API key in the header above.
+						</div>
+					</div>
+				{/if}
+
 				<!-- Config Warning -->
-				{#if configWarning && verifyFindings}
+				{#if configWarning && verifyFindings && hasApiKey}
 					<div class="flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-3 text-sm text-yellow-400">
 						<AlertCircle class="h-4 w-4" />
 						{configWarning}
@@ -471,12 +493,15 @@
 				<!-- Submit -->
 				<button
 					type="submit"
-					disabled={isAnalyzing || !repoUrl.trim()}
+					disabled={isAnalyzing || !repoUrl.trim() || (isSecured && !hasApiKey)}
 					class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					{#if isAnalyzing}
 						<Loader2 class="h-4 w-4 animate-spin" />
 						Analyzing...
+					{:else if isSecured && !hasApiKey}
+						<AlertCircle class="h-4 w-4" />
+						Enter API Key Above
 					{:else}
 						<Search class="h-4 w-4" />
 						{verifyFindings ? 'Analyze & Verify' : 'Analyze Repository'}

@@ -5,7 +5,7 @@
 		Shield, Bug, Layout, Clock, Activity, Brain, Wrench, 
 		ChevronDown, ChevronUp, BarChart3, Timer, Beaker, XCircle,
 		FileCode, FlaskConical, Play, CheckCheck, Heart, TrendingUp,
-		Lock, Lightbulb, RefreshCw, Gauge, AlertTriangle
+		Lock, Lightbulb, RefreshCw, Gauge, AlertTriangle, Key
 	} from 'lucide-svelte';
 	import { api } from '$lib/utils/api';
 
@@ -20,6 +20,13 @@
 	let runEvolutionAnalysis = true;
 	let isAnalyzing = false;
 	let error: string | null = null;
+	let hasApiKey = false;
+	let isSecured = false;
+
+	// Check API key status on mount and when it changes
+	function checkApiKey() {
+		hasApiKey = api.hasApiKey();
+	}
 	
 	// Results state
 	let result: any = null;
@@ -107,6 +114,22 @@
 		error = null;
 		result = null;
 	}
+
+	// Check API key and backend config on mount
+	onMount(async () => {
+		checkApiKey();
+		// Also set up an interval to check periodically (in case user enters key)
+		const interval = setInterval(checkApiKey, 1000);
+		
+		try {
+			const health = await api.health();
+			isSecured = health.secured;
+		} catch (e) {
+			// Health check failed
+		}
+		
+		return () => clearInterval(interval);
+	});
 
 	async function handleSubmit() {
 		if (!repoUrl.trim()) {
@@ -207,7 +230,16 @@
 			}
 
 		} catch (e) {
-			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			let errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			
+			// Improve error messages for common cases
+			if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+				errorMessage = 'Authentication required. Please enter your API key in the header above.';
+				checkApiKey(); // Refresh API key state
+			} else if (errorMessage.includes('403')) {
+				errorMessage = 'Invalid API key. Please check your API key and try again.';
+			}
+			
 			error = errorMessage;
 			addEvent('error', errorMessage);
 			stopTimer();
@@ -553,11 +585,24 @@
 				<span class="rounded bg-green-500/20 px-2 py-0.5 text-xs text-green-400">New</span>
 			</div>
 
-			<p class="text-sm text-muted-foreground mb-4">
-				Comprehensive codebase health check: security scan, bug detection with verification, and evolution roadmap.
-			</p>
+		<p class="text-sm text-muted-foreground mb-4">
+			Comprehensive codebase health check: security scan, bug detection with verification, and evolution roadmap.
+		</p>
 
-			<form on:submit|preventDefault={handleSubmit} class="space-y-4">
+		<!-- API Key Warning -->
+		{#if isSecured && !hasApiKey}
+			<div class="flex items-center gap-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 p-4 mb-4">
+				<Key class="h-5 w-5 text-yellow-500 shrink-0" />
+				<div class="flex-1">
+					<div class="font-medium text-yellow-500">API Key Required</div>
+					<div class="text-sm text-muted-foreground">
+						Enter your API key in the header above to use Code Doctor.
+					</div>
+				</div>
+			</div>
+		{/if}
+
+		<form on:submit|preventDefault={handleSubmit} class="space-y-4">
 				<!-- Repository URL -->
 				<div>
 					<label for="repo-url" class="mb-1 block text-sm font-medium">Repository URL</label>
@@ -627,12 +672,15 @@
 				<!-- Submit -->
 				<button
 					type="submit"
-					disabled={isAnalyzing || !repoUrl.trim()}
+					disabled={isAnalyzing || !repoUrl.trim() || (isSecured && !hasApiKey)}
 					class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					{#if isAnalyzing}
 						<Loader2 class="h-4 w-4 animate-spin" />
 						Running Health Check...
+					{:else if isSecured && !hasApiKey}
+						<Key class="h-4 w-4" />
+						Enter API Key Above
 					{:else}
 						<Heart class="h-4 w-4" />
 						Run Code Doctor
