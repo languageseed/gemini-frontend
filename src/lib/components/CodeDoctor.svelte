@@ -246,12 +246,12 @@
 				errorMessage = 'Invalid API key. Please check your API key and try again.';
 			} else if (isNetworkError) {
 				// Check if we have partial results
-				const hasPartialResults = metrics.issuesFound > 0 || metrics.verified > 0;
+				const hasPartialResults = result !== null;
 				
 				if (hasPartialResults) {
-					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results: ${metrics.verified}/${metrics.issuesFound} verified. Results shown below may be incomplete.`;
+					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results shown below may be incomplete.`;
 				} else {
-					errorMessage = 'Connection timed out (Railway has a 5-minute limit). Try a smaller repository or the async API.';
+					errorMessage = 'Connection timed out (Railway has a 5-minute limit). Try a smaller repository or use the Verified Analysis tab with Async Mode enabled.';
 				}
 			}
 			
