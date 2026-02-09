@@ -17,7 +17,7 @@
 	let repoUrl = '';
 	let focus = 'all';
 	let verifyFindings = true;
-	let useAsyncMode = false; // Use polling instead of SSE to avoid Railway's 5-min timeout
+	let useAsyncMode = true; // Default ON: use polling to avoid Railway's 5-min timeout
 	let isAnalyzing = false;
 	let error: string | null = null;
 	let asyncJobId: string | null = null;
