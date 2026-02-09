@@ -22,6 +22,7 @@
 	let error: string | null = null;
 	let hasApiKey = false;
 	let isSecured = false;
+	let useAsyncMode = true; // Default ON to avoid Railway 5-min timeout
 
 	// Check API key status on mount and when it changes
 	function checkApiKey() {
@@ -141,7 +142,102 @@
 		isAnalyzing = true;
 		resetState();
 		startTimer();
-		
+
+		if (useAsyncMode) {
+			await handleAsyncSubmit();
+		} else {
+			await handleStreamSubmit();
+		}
+	}
+
+	async function handleAsyncSubmit() {
+		addEvent('start', `Starting Code Doctor analysis (async mode) of ${repoUrl}`, 'init');
+		currentStep = 'Submitting analysis job...';
+
+		try {
+			const apiKey = api.getApiKey() || '';
+			const baseUrl = import.meta.env.VITE_API_URL || 'https://gemini-agent-hackathon-production.up.railway.app';
+
+			const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+			if (apiKey) headers['X-API-Key'] = apiKey;
+
+			// Submit via the non-streaming v5 endpoint using the async job system
+			// We use v4 async which handles cloning + verified analysis
+			const jobResponse = await api.submitAsyncJob({
+				repo_url: repoUrl.trim(),
+				focus: 'all',
+				verify: runCodeAnalysis,
+			});
+
+			addEvent('info', `Job submitted: ${jobResponse.job_id}`, 'init');
+			currentStep = 'Analysis in progress...';
+			currentPhase = 'analysis';
+
+			// Poll for completion
+			const finalStatus = await api.pollJobUntilComplete(
+				jobResponse.job_id,
+				(status) => {
+					if (status.progress) {
+						const phase = status.progress.phase || '';
+						if (phase === 'cloning') {
+							currentPhase = 'clone';
+							currentStep = 'Cloning repository...';
+						} else if (phase === 'analyzing') {
+							currentPhase = 'analysis';
+							currentStep = 'Analyzing codebase with Gemini 3 Pro...';
+						} else if (phase === 'verifying') {
+							currentPhase = 'analysis';
+							currentStep = `Verifying issues (${status.progress.verified || 0} done)...`;
+						}
+					}
+					addEvent('poll', `Status: ${status.status}`, currentPhase);
+				},
+				3000
+			);
+
+			if (finalStatus.status === 'completed' && finalStatus.result) {
+				stopTimer();
+				currentPhase = 'done';
+
+				// Map v4 result to Code Doctor format
+				const r = finalStatus.result as any;
+				result = {
+					overall_health_score: 100 - ((r.verified_count || 0) * 10),
+					code_issues: r.issues || [],
+					code_summary: {
+						total: r.total_issues || 0,
+						verified: r.verified_count || 0,
+						unverified: r.unverified_count || 0,
+					},
+					security_findings: [],
+					security_summary: { total: 0, critical: 0, high: 0, medium: 0, low: 0 },
+					evolution_recommendations: [],
+					evolution_summary: { total: 0 },
+					executive_summary: r.summary || '',
+					repo_url: repoUrl.trim(),
+				};
+
+				codeIssues = result.code_issues;
+				securityFindings = result.security_findings;
+				evolutionRecs = result.evolution_recommendations;
+				activeResultTab = 'issues';
+
+				addEvent('done', `Analysis complete! ${r.total_issues} issues, ${r.verified_count} verified.`, 'done');
+				dispatch('complete', { result });
+			} else if (finalStatus.status === 'failed') {
+				throw new Error(finalStatus.error || 'Job failed');
+			}
+		} catch (e) {
+			const errorMessage = e instanceof Error ? e.message : 'Analysis failed';
+			error = errorMessage;
+			addEvent('error', errorMessage);
+			stopTimer();
+		} finally {
+			isAnalyzing = false;
+		}
+	}
+
+	async function handleStreamSubmit() {
 		addEvent('start', `Starting Code Doctor analysis of ${repoUrl}`, 'init');
 		currentStep = 'Connecting to server...';
 
@@ -150,12 +246,8 @@
 			const baseUrl = import.meta.env.VITE_API_URL || 'https://gemini-agent-hackathon-production.up.railway.app';
 			const endpoint = `${baseUrl}/v5/analyze/full/stream`;
 
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json',
-			};
-			if (apiKey) {
-				headers['X-API-Key'] = apiKey;
-			}
+			const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+			if (apiKey) headers['X-API-Key'] = apiKey;
 
 			const response = await fetch(endpoint, {
 				method: 'POST',
@@ -178,81 +270,59 @@
 			const reader = response.body?.getReader();
 			const decoder = new TextDecoder();
 
-			if (!reader) {
-				throw new Error('Failed to get response stream');
-			}
+			if (!reader) throw new Error('Failed to get response stream');
 
 			let buffer = '';
 
 			while (true) {
 				const { done, value } = await reader.read();
-				
 				if (done) break;
 
 				buffer += decoder.decode(value, { stream: true });
-				
 				const eventStrings = buffer.split('\n\n');
 				buffer = eventStrings.pop() || '';
 
 				for (const eventStr of eventStrings) {
 					if (!eventStr.trim() || !eventStr.startsWith('data:')) continue;
-					
 					try {
 						const jsonStr = eventStr.replace('data:', '').trim();
 						const event = JSON.parse(jsonStr);
-						
 						handleStreamEvent(event);
 						
 						if (event.type === 'done') {
 							stopTimer();
 							currentPhase = 'done';
 							result = event;
-							
-							// Populate result arrays
 							securityFindings = event.security_findings || [];
 							codeIssues = event.code_issues || [];
 							evolutionRecs = event.evolution_recommendations || [];
-							
 							addEvent('done', `Analysis complete! Health score: ${Math.round(event.overall_health_score || 0)}`, 'done');
 							isAnalyzing = false;
-							
 							dispatch('complete', { result: event });
 							return;
 						}
-						
-						if (event.type === 'error') {
-							throw new Error(event.error || 'Unknown error');
-						}
+						if (event.type === 'error') throw new Error(event.error || 'Unknown error');
 					} catch (parseError) {
 						console.warn('Failed to parse SSE event:', eventStr, parseError);
 					}
 				}
 			}
-
 		} catch (e) {
 			let errorMessage = e instanceof Error ? e.message : 'Analysis failed';
-			
-			// Detect Railway 5-minute timeout (ERR_HTTP2_PROTOCOL_ERROR or network error)
 			const isNetworkError = errorMessage.toLowerCase().includes('network') || 
 				errorMessage.toLowerCase().includes('failed to fetch') ||
 				errorMessage.toLowerCase().includes('http2') ||
 				(e instanceof TypeError && e.message === 'Failed to fetch');
 			
-			// Improve error messages for common cases
 			if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
 				errorMessage = 'Authentication required. Please enter your API key in the header above.';
-				checkApiKey(); // Refresh API key state
+				checkApiKey();
 			} else if (errorMessage.includes('403')) {
 				errorMessage = 'Invalid API key. Please check your API key and try again.';
 			} else if (isNetworkError) {
-				// Check if we have partial results
-				const hasPartialResults = result !== null;
-				
-				if (hasPartialResults) {
-					errorMessage = `Connection timed out (Railway's 5-minute limit). Partial results shown below may be incomplete.`;
-				} else {
-					errorMessage = 'Connection timed out (Railway has a 5-minute limit). Try a smaller repository or use the Verified Analysis tab with Async Mode enabled.';
-				}
+				errorMessage = result !== null
+					? `Connection timed out (Railway's 5-minute limit). Partial results shown below may be incomplete.`
+					: 'Connection timed out (Railway has a 5-minute limit). Async Mode is recommended.';
 			}
 			
 			error = errorMessage;
@@ -683,6 +753,21 @@
 						{error}
 					</div>
 				{/if}
+
+				<!-- Async Mode Toggle -->
+				<div class="flex items-center justify-between rounded-lg border border-border bg-background p-3">
+					<div class="flex items-center gap-2">
+						<Timer class="h-4 w-4 text-blue-400" />
+						<div>
+							<div class="text-sm font-medium">Async Mode</div>
+							<div class="text-xs text-muted-foreground">Use polling for reliable analysis (avoids 5-min timeout)</div>
+						</div>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer">
+						<input type="checkbox" bind:checked={useAsyncMode} class="sr-only peer" disabled={isAnalyzing} />
+						<div class="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-blue-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+					</label>
+				</div>
 
 				<!-- Submit -->
 				<button
