@@ -116,6 +116,64 @@
 		result = null;
 	}
 
+	function exportReport() {
+		if (!result) return;
+		const date = new Date().toISOString().split('T')[0];
+		const score = Math.round(result.overall_health_score || 0);
+
+		let md = `# Code Doctor Report\n\n`;
+		md += `**Repository:** ${result.repo_url || repoUrl}\n`;
+		md += `**Date:** ${date}\n`;
+		md += `**Health Score:** ${score}/100\n\n`;
+
+		if (result.executive_summary) {
+			md += `## Executive Summary\n\n${result.executive_summary}\n\n`;
+		}
+
+		if (securityFindings.length > 0) {
+			md += `## Security Findings (${securityFindings.length})\n\n`;
+			for (const f of securityFindings) {
+				md += `### ${f.title}\n**Severity:** ${(f.severity || '').toUpperCase()}\n**File:** \`${f.file_path || ''}\`\n\n${f.description || ''}\n\n`;
+				if (f.evidence) md += `**Evidence:** ${f.evidence}\n\n`;
+				if (f.recommendation) md += `**Recommendation:** ${f.recommendation}\n\n`;
+				md += `---\n\n`;
+			}
+		}
+
+		if (codeIssues.length > 0) {
+			md += `## Code Issues (${codeIssues.length})\n\n`;
+			for (const issue of codeIssues) {
+				const verified = issue.verification_status === 'verified' ? ' ✓ VERIFIED' : '';
+				const issueType = issue.issue_type ? ` [${issue.issue_type}]` : '';
+				md += `### ${issue.title}${verified}${issueType}\n`;
+				md += `**Severity:** ${(issue.severity || '').toUpperCase()}\n`;
+				md += `**Category:** ${issue.category || ''}\n`;
+				md += `**File:** \`${issue.file_path || ''}${issue.line_number ? ':' + issue.line_number : ''}\`\n\n`;
+				md += `${issue.description || ''}\n\n`;
+				if (issue.code_snippet) md += `**Problematic Code:**\n\`\`\`\n${issue.code_snippet}\n\`\`\`\n\n`;
+				if (issue.recommendation) md += `**Recommendation:** ${issue.recommendation}\n\n`;
+				if (issue.recommended_code) md += `**Suggested Fix:**\n\`\`\`\n${issue.recommended_code}\n\`\`\`\n\n`;
+				if (issue.test_code && issue.verification_status !== 'skipped') md += `**Verification Test:**\n\`\`\`python\n${issue.test_code}\n\`\`\`\n\n`;
+				md += `---\n\n`;
+			}
+		}
+
+		if (evolutionRecs.length > 0) {
+			md += `## Evolution Recommendations (${evolutionRecs.length})\n\n`;
+			for (const rec of evolutionRecs) {
+				md += `### ${rec.title}\n**Priority:** ${rec.priority || ''} | **Effort:** ${rec.effort || ''}\n\n${rec.description || ''}\n\n---\n\n`;
+			}
+		}
+
+		const blob = new Blob([md], { type: 'text/markdown' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `code-doctor-${(result.repo_url || repoUrl).split('/').pop()}-${date}.md`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	// Check API key and backend config on mount
 	onMount(async () => {
 		checkApiKey();
@@ -442,13 +500,21 @@
 <div class="space-y-4">
 	<!-- Show Results if available -->
 	{#if result}
-		<div class="mb-4">
+		<div class="mb-4 flex items-center justify-between">
 			<button
 				type="button"
 				on:click={startNewAnalysis}
 				class="text-sm text-primary hover:underline flex items-center gap-1"
 			>
 				← Analyze another repository
+			</button>
+			<button
+				type="button"
+				on:click={exportReport}
+				class="flex items-center gap-2 rounded-lg bg-secondary px-3 py-2 text-sm hover:bg-secondary/80"
+			>
+				<ChevronDown class="h-4 w-4" />
+				Export Report
 			</button>
 		</div>
 
